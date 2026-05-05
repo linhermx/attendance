@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.pdb
+*.egg-info/
+*.spec
+dist/
+build/
+
+# Virtual env
+venv/
+.venv/
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Outputs
+salida/
+salida_test/
+salida*/
+
+# Runtime folders (launcher / app)
+app/
+downloads/
+logs/
+
+# Excel files (ignore by default, allow examples)
+*.xlsx
+*.xls
+*.xlsm
+!examples/**/*.xlsx
+!examples/**/*.xls
+!examples/**/*.xlsm
