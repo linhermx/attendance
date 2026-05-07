@@ -17,6 +17,7 @@ OVERTIME_REPORT_NAME = "reporte_horas_extra.xlsx"
 LOG_NAME = "run_log.txt"
 DUPLICATE_WINDOW_SECONDS = 3 * 60
 QUICK_VIEW_BLOCK_SIZE = 4
+WORKDAY_GRACE_MINUTES = 5
 PERSONAL_COLUMN_ALIASES = {
     "id de usuario": "id_usuario",
     "nombre": "nombre",
@@ -109,6 +110,13 @@ def display_time(value: datetime | None) -> str:
     if value is None or pd.isna(value):
         return ""
     return value.strftime("%H:%M:%S")
+
+
+def display_duration_minutes(total_minutes: int | None) -> str:
+    if total_minutes is None:
+        return ""
+    hours, minutes = divmod(max(0, int(total_minutes)), 60)
+    return f"{hours:02d}:{minutes:02d}"
 
 
 def minutes_floor(delta_seconds: float) -> int:
@@ -249,10 +257,29 @@ def calculate_payable_overtime_hours(
     schedule: WorkSchedule,
 ) -> int:
     scheduled_entry_dt = combine_day_time(work_date, schedule.entry_time)
-    payable_start_dt = max(scheduled_entry_dt, entry_real) + timedelta(minutes=schedule.workday_minutes)
+    effective_entry_dt = max(scheduled_entry_dt, entry_real - timedelta(minutes=WORKDAY_GRACE_MINUTES))
+    payable_start_dt = effective_entry_dt + timedelta(minutes=schedule.workday_minutes)
     if exit_real <= payable_start_dt:
         return 0
     return int((exit_real - payable_start_dt).total_seconds() // 3600)
+
+
+def calculate_worked_minutes(
+    entry_real: datetime | None,
+    lunch_out_real: datetime | None,
+    lunch_return_real: datetime | None,
+    exit_real: datetime | None,
+) -> int | None:
+    if entry_real is None or exit_real is None:
+        return None
+
+    total_seconds = (exit_real - entry_real).total_seconds()
+    if lunch_out_real is not None and lunch_return_real is not None:
+        total_seconds -= (lunch_return_real - lunch_out_real).total_seconds()
+    elif lunch_out_real is not None and lunch_return_real is None:
+        total_seconds = (lunch_out_real - entry_real).total_seconds()
+
+    return minutes_floor(total_seconds)
 
 
 def prepare_personal_frame(frame: pd.DataFrame, issues: list[RunIssue]) -> tuple[pd.DataFrame, set[str]]:
@@ -615,6 +642,7 @@ def build_daily_frame(full_frame: pd.DataFrame) -> pd.DataFrame:
         "Inicio comida",
         "Fin comida",
         "Salida",
+        "Horas trabajadas",
         "Retardo min",
         "Comida min",
         "Salida anticipada min",
@@ -652,7 +680,7 @@ def build_quick_view_source(
 ) -> pd.DataFrame:
     source = daily_frame.copy()
 
-    base_columns = ["ID", "Nombre", "Entrada", "Inicio comida", "Fin comida", "Salida", "Horas extra", "Estatus", "Detalle"]
+    base_columns = ["ID", "Nombre", "Entrada", "Inicio comida", "Fin comida", "Salida", "Horas trabajadas", "Horas extra", "Estatus", "Detalle"]
     for column in base_columns:
         if column not in source.columns:
             source[column] = ""
@@ -678,6 +706,7 @@ def build_quick_view_frame(source_frame: pd.DataFrame) -> pd.DataFrame:
             ("Inicio comida", "Inicio comida"),
             ("Fin comida", "Fin comida"),
             ("Salida", "Salida"),
+            ("Horas trabajadas", "Horas trabajadas"),
             ("Horas extra", "Horas extra"),
             ("Estatus", "Estatus"),
             ("Detalle", "Detalle"),
@@ -795,9 +824,9 @@ def write_quick_view_sheet(writer: pd.ExcelWriter, result: RunResult) -> None:
     worksheet.merge_range(0, 0, 0, QUICK_VIEW_BLOCK_SIZE, "Vista rápida para compartir", title_format)
     worksheet.write(1, 0, f"Fecha: {result.work_date_label}")
 
-    placeholder_fields = {"Entrada", "Inicio comida", "Fin comida", "Salida", "Horas extra"}
+    placeholder_fields = {"Entrada", "Inicio comida", "Fin comida", "Salida", "Horas trabajadas", "Horas extra"}
     block_start_row = 3
-    block_rows = 10
+    block_rows = 11
     for start in range(0, len(source_frame), block_rows):
         chunk = source_frame.iloc[start : start + block_rows]
         if chunk.empty:
@@ -820,6 +849,7 @@ def write_quick_view_sheet(writer: pd.ExcelWriter, result: RunResult) -> None:
             ("INICIO COMIDA", "Inicio comida"),
             ("FIN COMIDA", "Fin comida"),
             ("SALIDA", "Salida"),
+            ("HORAS TRABAJADAS", "Horas trabajadas"),
             ("HORAS EXTRA", "Horas extra"),
             ("ESTATUS", "Estatus"),
             ("DETALLE", "Detalle"),
@@ -1049,6 +1079,7 @@ def calculate_attendance(
                 "Inicio comida": "",
                 "Fin comida": "",
                 "Salida": "",
+                "Horas trabajadas": "",
                 "Retardo min": 0,
                 "Comida min": "",
                 "Salida anticipada min": "",
@@ -1107,6 +1138,8 @@ def calculate_attendance(
             if exit_real > exit_dt:
                 overtime_hours = calculate_payable_overtime_hours(entry_real, exit_real, work_date, schedule)
 
+        worked_minutes = calculate_worked_minutes(entry_real, lunch_out_real, lunch_return_real, exit_real)
+
         status = compose_status(
             absent=False,
             tardy_minutes=tardy_minutes,
@@ -1121,6 +1154,7 @@ def calculate_attendance(
                 "Inicio comida": display_time(lunch_out_real),
                 "Fin comida": display_time(lunch_return_real),
                 "Salida": display_time(exit_real),
+                "Horas trabajadas": display_duration_minutes(worked_minutes),
                 "Retardo min": tardy_minutes,
                 "Comida min": lunch_minutes,
                 "Salida anticipada min": early_leave_minutes,
