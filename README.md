@@ -33,6 +33,7 @@ Incluye:
   - regreso de comida
   - salida final
 - cálculo de salida anticipada
+- cálculo de horas trabajadas
 - cálculo de **horas extra pagables** solo por horas completas después de cumplir la jornada
 - vista rápida en Excel para compartir con jefatura
 - exclusión automática de registros inválidos en la BBDD
@@ -182,14 +183,17 @@ Columnas opcionales que también se leen cuando existen:
 ### Reglas de salida y horas extra
 
 - salida anticipada cuando la checada final queda antes del horario programado
+- el reporte principal muestra también las `horas trabajadas`
 - horas extra solo por **horas completas**
 - las horas extra ya no se toman solo por salir después del horario
 - primero se exige cumplir la jornada diaria
+- existe una holgura de `5 min` para cumplir jornada, sin eliminar el retardo
 - solo el tiempo posterior a esa jornada cuenta como **hora extra pagable**
 
 Ejemplo:
 
 - si alguien entra tarde y sale más tarde solo para compensar su jornada, eso no genera horas extra
+- si alguien entra `08:05` y sale `17:00`, conserva el `retardo`, pero sí cumple su jornada
 - si alguien cumple su jornada y además rebasa ese punto por una hora completa, sí se genera `1` hora extra
 
 ---
