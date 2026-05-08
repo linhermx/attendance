@@ -38,6 +38,7 @@ Incluye:
 - vista rápida en Excel para compartir con jefatura
 - exclusión automática de registros inválidos en la BBDD
 - depuración de checadas duplicadas conservando la más temprana
+- inferencia inteligente cuando falta solo una checada y existen `3` registros coherentes
 - validación de columnas requeridas y detección de incidencias globales
 - exportación de resultados a **Excel**
 - launcher con actualización automática por **GitHub Releases**
@@ -168,6 +169,8 @@ Columnas opcionales que también se leen cuando existen:
 - falta cuando no existe ninguna checada del trabajador en el día
 - se excluyen del análisis los registros de personal sin nombre usable
 - si existen checadas duplicadas, se conserva la más temprana
+- si existe exactamente `1` checada faltante y el patrón de `3` checadas encaja con los horarios esperados, el sistema la infiere
+- las entradas inferidas se muestran con `~` en el reporte
 
 ### Reglas de comida
 
@@ -179,6 +182,7 @@ Columnas opcionales que también se leen cuando existen:
   - máximo `30 min`
 - comida menor al mínimo no se eleva como incidencia
 - comida mayor al máximo sí se reporta como incidencia
+- el exceso de comida se muestra solo como minutos por encima del máximo
 
 ### Reglas de salida y horas extra
 

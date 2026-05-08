@@ -6,6 +6,28 @@ This project follows **Semantic Versioning** (`MAJOR.MINOR.PATCH`).
 
 ---
 
+## [v1.1.0] - Smart Punch Inference
+
+### Added
+- Intelligent inference for one missing punch when exactly `3` punches exist in a coherent daily pattern
+- Visual marker `~` for inferred entry times in the report and quick view
+
+### Implemented
+- Three-punch pattern matching against expected schedule slots (`entry`, `lunch out`, `lunch return`, `exit`)
+- Protection against misleading worked-hours totals on incomplete punch sequences
+- Lunch-overrun details now show only the minutes above the allowed maximum
+
+### Business Rules
+- When exactly one punch is missing and the remaining three match the expected sequence, the system infers the missing checkpoint
+- Inferred entries can be used to estimate worked hours
+- Inferred entries do not generate a tardiness penalty
+
+### Notes
+- This release improves robustness for real-world missed punches without changing standard schedules
+- Fully compatible with the reporting and Windows distribution flow introduced in `v1.0.0`
+
+---
+
 ## [v1.0.0] - First Official Release
 
 ### Added
