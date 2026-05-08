@@ -6,6 +6,33 @@ This project follows **Semantic Versioning** (`MAJOR.MINOR.PATCH`).
 
 ---
 
+## [v1.2.0] - Range Reporting & Historical View
+
+### Added
+- Attendance analysis in `Rango` mode using the same personnel database and a multi-day export from ZKAccess
+- Historical Excel view with employees in horizontal layout and daily history in vertical blocks
+- Period-level summaries for alerts, overtime, and consolidated attendance detail
+
+### Implemented
+- GUI separation between `Diario` and `Rango` workflows
+- Date-range expansion from the minimum to maximum date in the export, limited to labor days (`Monday` to `Saturday`)
+- Detection of partial cutoff on the last day of the range
+- Freeze panes in the historical weekly view to keep worker identity visible during vertical review
+- Clear validation messages when the user loads `Personal` and `Eventos` files in the wrong fields
+- Removal of `run_log.txt` export in both daily and range modes
+
+### Business Rules
+- All valid workers appear in the range report, even if they have no punches on a given labor day
+- Labor days without global records are treated as `Sin operacion`, not as mass absences
+- Historical overtime is reported both as employee summary and per-day detail
+- Three-punch inference now prioritizes plausible slot windows to avoid misclassifying very late entries as lunch punches
+
+### Notes
+- This release extends the system from single-day control to weekly historical review without changing the daily workflow
+- The visual style and status colors remain aligned with the existing daily attendance report
+
+---
+
 ## [v1.1.0] - Smart Punch Inference
 
 ### Added

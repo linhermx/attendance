@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "attendance"
-version = "1.1.0"
+version = "1.2.0"
 description = "Herramienta interna para analizar asistencias diarias a partir de archivos del checador."
 readme = "README.md"
 requires-python = ">=3.10"
