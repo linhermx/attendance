@@ -273,11 +273,14 @@ def calculate_worked_minutes(
     if entry_real is None or exit_real is None:
         return None
 
+    if lunch_out_real is None and lunch_return_real is None:
+        return minutes_floor((exit_real - entry_real).total_seconds())
+
+    if lunch_out_real is None or lunch_return_real is None:
+        return None
+
     total_seconds = (exit_real - entry_real).total_seconds()
-    if lunch_out_real is not None and lunch_return_real is not None:
-        total_seconds -= (lunch_return_real - lunch_out_real).total_seconds()
-    elif lunch_out_real is not None and lunch_return_real is None:
-        total_seconds = (lunch_out_real - entry_real).total_seconds()
+    total_seconds -= (lunch_return_real - lunch_out_real).total_seconds()
 
     return minutes_floor(total_seconds)
 
@@ -478,6 +481,56 @@ def find_exit_index(
     return None
 
 
+def infer_three_punch_sequence(
+    events: pd.DataFrame,
+    work_date: date,
+    schedule: WorkSchedule,
+) -> dict[str, object] | None:
+    if len(events) != 3:
+        return None
+
+    expected_slots = [
+        ("entry", combine_day_time(work_date, schedule.entry_time)),
+        ("lunch_out", combine_day_time(work_date, schedule.lunch_out_time)),
+        ("lunch_return", combine_day_time(work_date, schedule.lunch_return_time)),
+        ("exit", combine_day_time(work_date, schedule.exit_time)),
+    ]
+    hypotheses = [
+        ("entry", [1, 2, 3]),
+        ("lunch_out", [0, 2, 3]),
+        ("lunch_return", [0, 1, 3]),
+        ("exit", [0, 1, 2]),
+    ]
+
+    event_indices = list(events.index)
+    scored_hypotheses: list[tuple[float, str, list[int]]] = []
+    for missing_slot, slot_indexes in hypotheses:
+        score = 0.0
+        for event_index, slot_index in zip(event_indices, slot_indexes):
+            expected_time = expected_slots[slot_index][1]
+            actual_time = events.loc[event_index, "tiempo"]
+            score += abs((actual_time - expected_time).total_seconds()) / 60
+        scored_hypotheses.append((score, missing_slot, slot_indexes))
+
+    scored_hypotheses.sort(key=lambda item: item[0])
+    _best_score, missing_slot, slot_indexes = scored_hypotheses[0]
+
+    slot_map: dict[str, int | None] = {
+        "entry": None,
+        "lunch_out": None,
+        "lunch_return": None,
+        "exit": None,
+    }
+    for event_index, slot_index in zip(event_indices, slot_indexes):
+        slot_name = expected_slots[slot_index][0]
+        slot_map[slot_name] = int(event_index)
+
+    return {
+        "missing_slot": missing_slot,
+        "slot_map": slot_map,
+    }
+
+
 def compose_status(absent: bool, tardy_minutes: int, observations: list[str]) -> str:
     if absent:
         return "Falta"
@@ -612,9 +665,11 @@ def summarize_detail(detail: str) -> str:
         return ""
     replacements = {
         "Sin checadas en el día.": "Sin checadas",
+        "Sin checada de entrada.": "Sin entrada",
         "Sin checada de salida a comida.": "Sin salida a comida",
         "Sin checada de regreso de comida.": "Sin regreso de comida",
         "Sin checada de salida final.": "Sin salida final",
+        "Secuencia inferida por patrón de 3 checadas.": "Secuencia inferida",
         "Tiempo de comida mayor al máximo permitido": "Comida mayor al máximo",
         "Salida antes del horario programado": "Salida anticipada",
     }
@@ -1090,17 +1145,30 @@ def calculate_attendance(
             employee_rows.append(row)
             continue
 
-        entry_index = int(employee_events.index[0])
-        lunch_out_index = find_lunch_out_index(employee_events, work_date, schedule)
-        lunch_return_index = find_lunch_return_index(employee_events, lunch_out_index, work_date, schedule)
-        start_for_exit = lunch_return_index
-        if start_for_exit is None:
-            start_for_exit = lunch_out_index
-        if start_for_exit is None:
-            start_for_exit = entry_index
-        exit_index = find_exit_index(employee_events, start_for_exit, work_date, schedule)
+        inferred_sequence = infer_three_punch_sequence(employee_events, work_date, schedule)
+        missing_slot: str | None = None
+        if inferred_sequence is not None:
+            slot_map = inferred_sequence["slot_map"]
+            missing_slot = str(inferred_sequence["missing_slot"])
+            entry_index = slot_map["entry"]
+            lunch_out_index = slot_map["lunch_out"]
+            lunch_return_index = slot_map["lunch_return"]
+            exit_index = slot_map["exit"]
+        else:
+            entry_index = int(employee_events.index[0])
+            lunch_out_index = find_lunch_out_index(employee_events, work_date, schedule)
+            lunch_return_index = find_lunch_return_index(employee_events, lunch_out_index, work_date, schedule)
+            start_for_exit = lunch_return_index
+            if start_for_exit is None:
+                start_for_exit = lunch_out_index
+            if start_for_exit is None:
+                start_for_exit = entry_index
+            exit_index = find_exit_index(employee_events, start_for_exit, work_date, schedule)
 
-        entry_real = employee_events.loc[entry_index, "tiempo"]
+        entry_is_inferred = missing_slot == "entry"
+        entry_real = combine_day_time(work_date, schedule.entry_time) if entry_is_inferred else (
+            employee_events.loc[entry_index, "tiempo"] if entry_index is not None else None
+        )
         lunch_out_real = employee_events.loc[lunch_out_index, "tiempo"] if lunch_out_index is not None else None
         lunch_return_real = (
             employee_events.loc[lunch_return_index, "tiempo"] if lunch_return_index is not None else None
@@ -1108,34 +1176,48 @@ def calculate_attendance(
         exit_real = employee_events.loc[exit_index, "tiempo"] if exit_index is not None else None
 
         tardy_minutes = 0
-        if entry_real > entry_dt:
+        if entry_real is not None and not entry_is_inferred and entry_real > entry_dt:
             tardy_minutes = minutes_floor((entry_real - entry_dt).total_seconds())
 
         lunch_minutes: int | str = ""
-        if lunch_out_real is None:
+        if missing_slot == "entry":
+            observations.append("Sin checada de entrada.")
+            observations.append("Secuencia inferida por patrón de 3 checadas.")
+        elif missing_slot == "lunch_out":
             observations.append("Sin checada de salida a comida.")
-        if lunch_out_real is not None and lunch_return_real is None:
+            observations.append("Secuencia inferida por patrón de 3 checadas.")
+        elif missing_slot == "lunch_return":
             observations.append("Sin checada de regreso de comida.")
+            observations.append("Secuencia inferida por patrón de 3 checadas.")
+        elif missing_slot == "exit":
+            observations.append("Sin checada de salida final.")
+            observations.append("Secuencia inferida por patrón de 3 checadas.")
+        else:
+            if lunch_out_real is None:
+                observations.append("Sin checada de salida a comida.")
+            if lunch_out_real is not None and lunch_return_real is None:
+                observations.append("Sin checada de regreso de comida.")
 
         if lunch_out_real is not None and lunch_return_real is not None:
             lunch_minutes = minutes_floor((lunch_return_real - lunch_out_real).total_seconds())
             if lunch_minutes < schedule.lunch_min_minutes:
                 pass
             if lunch_minutes > schedule.lunch_max_minutes:
+                extra_lunch_minutes = lunch_minutes - schedule.lunch_max_minutes
                 observations.append(
-                    f"Tiempo de comida mayor al máximo permitido ({lunch_minutes} min)."
+                    f"Tiempo de comida mayor al máximo permitido (+{extra_lunch_minutes} min)."
                 )
 
         early_leave_minutes: int | str = ""
         overtime_hours = 0
-        if exit_real is None:
+        if exit_real is None and missing_slot != "exit":
             observations.append("Sin checada de salida final.")
         else:
-            if exit_real < exit_dt:
+            if exit_real is not None and exit_real < exit_dt:
                 early_leave_minutes = minutes_floor((exit_dt - exit_real).total_seconds())
                 if early_leave_minutes > 0:
                     observations.append(f"Salida antes del horario programado ({early_leave_minutes} min).")
-            if exit_real > exit_dt:
+            if exit_real is not None and entry_real is not None and exit_real > exit_dt:
                 overtime_hours = calculate_payable_overtime_hours(entry_real, exit_real, work_date, schedule)
 
         worked_minutes = calculate_worked_minutes(entry_real, lunch_out_real, lunch_return_real, exit_real)
@@ -1150,7 +1232,7 @@ def calculate_attendance(
             {
                 "ID": employee_id,
                 "Nombre": employee_name,
-                "Entrada": display_time(entry_real),
+                "Entrada": f"~{display_time(entry_real)}" if entry_is_inferred and entry_real is not None else display_time(entry_real),
                 "Inicio comida": display_time(lunch_out_real),
                 "Fin comida": display_time(lunch_return_real),
                 "Salida": display_time(exit_real),
