@@ -15,6 +15,9 @@ SHEET_NAME = "data"
 REPORT_NAME = "reporte_asistencia.xlsx"
 OVERTIME_REPORT_NAME = "reporte_horas_extra.xlsx"
 LOG_NAME = "run_log.txt"
+RANGE_REPORT_NAME = "reporte_asistencia_rango.xlsx"
+RANGE_OVERTIME_REPORT_NAME = "reporte_horas_extra_rango.xlsx"
+RANGE_LOG_NAME = "run_log_rango.txt"
 DUPLICATE_WINDOW_SECONDS = 3 * 60
 QUICK_VIEW_BLOCK_SIZE = 4
 WORKDAY_GRACE_MINUTES = 5
@@ -84,7 +87,35 @@ class RunResult:
     overtime_frame: pd.DataFrame
     report_file: Path
     overtime_report_file: Path | None
-    log_file: Path
+    log_file: Path | None
+    issues: list[RunIssue]
+
+
+@dataclass
+class RangeRunResult:
+    start_date: date | None
+    end_date: date | None
+    range_label: str
+    total_employees: int
+    workday_count: int
+    operational_day_count: int
+    non_operational_day_count: int
+    partial_cutoff: bool
+    attendance_count: int
+    tardy_count: int
+    absence_count: int
+    incident_employee_count: int
+    overtime_employee_count: int
+    total_overtime_hours: int
+    summary_frame: pd.DataFrame
+    historical_preview_frame: pd.DataFrame
+    alerts_frame: pd.DataFrame
+    detail_frame: pd.DataFrame
+    overtime_summary_frame: pd.DataFrame
+    overtime_detail_frame: pd.DataFrame
+    report_file: Path
+    overtime_report_file: Path | None
+    log_file: Path | None
     issues: list[RunIssue]
 
 
@@ -174,6 +205,41 @@ def build_output_paths(output_dir: Path, overwrite: bool) -> tuple[Path, Path]:
     report_path = build_output_path(output_dir, REPORT_NAME, overwrite)
     log_path = build_output_path(output_dir, LOG_NAME, overwrite)
     return report_path, log_path
+
+
+def build_range_output_paths(output_dir: Path, overwrite: bool) -> tuple[Path, Path, Path]:
+    report_path = build_output_path(output_dir, RANGE_REPORT_NAME, overwrite)
+    overtime_path = build_output_path(output_dir, RANGE_OVERTIME_REPORT_NAME, overwrite)
+    log_path = build_output_path(output_dir, RANGE_LOG_NAME, overwrite)
+    return report_path, overtime_path, log_path
+
+
+def detect_role_mismatch_issues(
+    personal_frame: pd.DataFrame,
+    events_frame: pd.DataFrame,
+    events_label: str,
+) -> list[RunIssue]:
+    issues: list[RunIssue] = []
+    missing_personal = [column for column in REQUIRED_PERSONAL_COLUMNS if column not in personal_frame.columns]
+    missing_events = [column for column in REQUIRED_EVENT_COLUMNS if column not in events_frame.columns]
+    personal_looks_like_events = all(column in personal_frame.columns for column in REQUIRED_EVENT_COLUMNS)
+    events_looks_like_personal = all(column in events_frame.columns for column in REQUIRED_PERSONAL_COLUMNS)
+
+    if missing_personal and personal_looks_like_events:
+        issues.append(
+            RunIssue(
+                "error",
+                "El archivo cargado en Personal parece ser un archivo de eventos del checador. Revisa que no estén invertidos.",
+            )
+        )
+    if missing_events and events_looks_like_personal:
+        issues.append(
+            RunIssue(
+                "error",
+                f"El archivo cargado en {events_label} parece ser una BBDD de personal. Revisa que no estén invertidos.",
+            )
+        )
+    return issues
 
 
 def refresh_summary(result: RunResult) -> None:
@@ -502,14 +568,36 @@ def infer_three_punch_sequence(
         ("exit", [0, 1, 2]),
     ]
 
+    def slot_window(slot_name: str) -> tuple[datetime, datetime]:
+        entry_dt = combine_day_time(work_date, schedule.entry_time)
+        lunch_out_dt = combine_day_time(work_date, schedule.lunch_out_time)
+        lunch_return_dt = combine_day_time(work_date, schedule.lunch_return_time)
+        exit_dt = combine_day_time(work_date, schedule.exit_time)
+        if slot_name == "entry":
+            return (entry_dt - timedelta(hours=3), lunch_out_dt - timedelta(minutes=30))
+        if slot_name == "lunch_out":
+            return (lunch_out_dt - timedelta(minutes=60), lunch_return_dt + timedelta(minutes=30))
+        if slot_name == "lunch_return":
+            return (lunch_out_dt + timedelta(minutes=15), exit_dt - timedelta(minutes=45))
+        return (lunch_return_dt + timedelta(minutes=30), exit_dt + timedelta(hours=4))
+
+    def plausibility_penalty(slot_name: str, actual_time: datetime) -> float:
+        window_start, window_end = slot_window(slot_name)
+        if actual_time < window_start:
+            return 10000 + abs((window_start - actual_time).total_seconds()) / 60
+        if actual_time > window_end:
+            return 10000 + abs((actual_time - window_end).total_seconds()) / 60
+        return 0.0
+
     event_indices = list(events.index)
     scored_hypotheses: list[tuple[float, str, list[int]]] = []
     for missing_slot, slot_indexes in hypotheses:
         score = 0.0
         for event_index, slot_index in zip(event_indices, slot_indexes):
-            expected_time = expected_slots[slot_index][1]
+            slot_name, expected_time = expected_slots[slot_index]
             actual_time = events.loc[event_index, "tiempo"]
             score += abs((actual_time - expected_time).total_seconds()) / 60
+            score += plausibility_penalty(slot_name, actual_time)
         scored_hypotheses.append((score, missing_slot, slot_indexes))
 
     scored_hypotheses.sort(key=lambda item: item[0])
@@ -541,6 +629,186 @@ def compose_status(absent: bool, tardy_minutes: int, observations: list[str]) ->
     if observations:
         return "Incidencia"
     return "Puntual"
+
+
+def build_non_operational_day_rows(
+    personal: pd.DataFrame,
+    work_date: date,
+    schedule: WorkSchedule,
+    detail_message: str,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for _, employee in personal.iterrows():
+        rows.append(
+            {
+                "Fecha": work_date.strftime("%Y-%m-%d"),
+                "Día": work_date.strftime("%A"),
+                "Horario": schedule.label,
+                "ID": employee["id_usuario"],
+                "Nombre": employee["nombre_completo"],
+                "Entrada": "",
+                "Inicio comida": "",
+                "Fin comida": "",
+                "Salida": "",
+                "Horas trabajadas": "",
+                "Retardo min": 0,
+                "Comida min": "",
+                "Salida anticipada min": "",
+                "Horas extra": 0,
+                "Estatus": "Sin operación",
+                "Detalle": detail_message,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def analyze_operational_day(
+    personal: pd.DataFrame,
+    deduped_events: pd.DataFrame,
+    work_date: date,
+    schedule: WorkSchedule,
+    cutoff_time: datetime | None = None,
+) -> pd.DataFrame:
+    employee_rows: list[dict[str, object]] = []
+    entry_dt = combine_day_time(work_date, schedule.entry_time)
+    exit_dt = combine_day_time(work_date, schedule.exit_time)
+    lunch_out_dt = combine_day_time(work_date, schedule.lunch_out_time)
+    lunch_return_dt = combine_day_time(work_date, schedule.lunch_return_time)
+
+    for _, employee in personal.iterrows():
+        employee_id = employee["id_usuario"]
+        employee_name = employee["nombre_completo"]
+        employee_events = deduped_events[deduped_events["id_usuario"] == employee_id].copy().sort_values("tiempo")
+        observations: list[str] = []
+
+        if employee_events.empty:
+            if cutoff_time is not None:
+                status = "Pendiente"
+                detail = "Corte parcial"
+            else:
+                status = "Falta"
+                detail = summarize_detail("Sin checadas en el día.")
+            employee_rows.append(
+                {
+                    "Fecha": work_date.strftime("%Y-%m-%d"),
+                    "Día": work_date.strftime("%A"),
+                    "Horario": schedule.label,
+                    "ID": employee_id,
+                    "Nombre": employee_name,
+                    "Entrada": "",
+                    "Inicio comida": "",
+                    "Fin comida": "",
+                    "Salida": "",
+                    "Horas trabajadas": "",
+                    "Retardo min": 0,
+                    "Comida min": "",
+                    "Salida anticipada min": "",
+                    "Horas extra": 0,
+                    "Estatus": status,
+                    "Detalle": detail,
+                }
+            )
+            continue
+
+        inferred_sequence = infer_three_punch_sequence(employee_events, work_date, schedule)
+        missing_slot: str | None = None
+        if inferred_sequence is not None:
+            slot_map = inferred_sequence["slot_map"]
+            missing_slot = str(inferred_sequence["missing_slot"])
+            entry_index = slot_map["entry"]
+            lunch_out_index = slot_map["lunch_out"]
+            lunch_return_index = slot_map["lunch_return"]
+            exit_index = slot_map["exit"]
+        else:
+            entry_index = int(employee_events.index[0])
+            lunch_out_index = find_lunch_out_index(employee_events, work_date, schedule)
+            lunch_return_index = find_lunch_return_index(employee_events, lunch_out_index, work_date, schedule)
+            start_for_exit = lunch_return_index
+            if start_for_exit is None:
+                start_for_exit = lunch_out_index
+            if start_for_exit is None:
+                start_for_exit = entry_index
+            exit_index = find_exit_index(employee_events, start_for_exit, work_date, schedule)
+
+        entry_is_inferred = missing_slot == "entry"
+        entry_real = combine_day_time(work_date, schedule.entry_time) if entry_is_inferred else (
+            employee_events.loc[entry_index, "tiempo"] if entry_index is not None else None
+        )
+        lunch_out_real = employee_events.loc[lunch_out_index, "tiempo"] if lunch_out_index is not None else None
+        lunch_return_real = (
+            employee_events.loc[lunch_return_index, "tiempo"] if lunch_return_index is not None else None
+        )
+        exit_real = employee_events.loc[exit_index, "tiempo"] if exit_index is not None else None
+
+        tardy_minutes = 0
+        if entry_real is not None and not entry_is_inferred and entry_real > entry_dt:
+            tardy_minutes = minutes_floor((entry_real - entry_dt).total_seconds())
+
+        lunch_minutes: int | str = ""
+        if missing_slot == "entry":
+            observations.append("Sin checada de entrada.")
+            observations.append("Secuencia inferida por patrón de 3 checadas.")
+        elif missing_slot == "lunch_out":
+            observations.append("Sin checada de salida a comida.")
+            observations.append("Secuencia inferida por patrón de 3 checadas.")
+        elif missing_slot == "lunch_return":
+            observations.append("Sin checada de regreso de comida.")
+            observations.append("Secuencia inferida por patrón de 3 checadas.")
+        elif missing_slot == "exit":
+            observations.append("Sin checada de salida final.")
+            observations.append("Secuencia inferida por patrón de 3 checadas.")
+        else:
+            if lunch_out_real is None and (cutoff_time is None or cutoff_time >= lunch_out_dt):
+                observations.append("Sin checada de salida a comida.")
+            if lunch_out_real is not None and lunch_return_real is None and (cutoff_time is None or cutoff_time >= lunch_return_dt):
+                observations.append("Sin checada de regreso de comida.")
+
+        if lunch_out_real is not None and lunch_return_real is not None:
+            lunch_minutes = minutes_floor((lunch_return_real - lunch_out_real).total_seconds())
+            if lunch_minutes > schedule.lunch_max_minutes:
+                extra_lunch_minutes = lunch_minutes - schedule.lunch_max_minutes
+                observations.append(
+                    f"Tiempo de comida mayor al máximo permitido (+{extra_lunch_minutes} min)."
+                )
+
+        early_leave_minutes: int | str = ""
+        overtime_hours = 0
+        if exit_real is None:
+            if missing_slot != "exit" and (cutoff_time is None or cutoff_time >= exit_dt):
+                observations.append("Sin checada de salida final.")
+        else:
+            if cutoff_time is None and exit_real < exit_dt:
+                early_leave_minutes = minutes_floor((exit_dt - exit_real).total_seconds())
+                if early_leave_minutes > 0:
+                    observations.append(f"Salida antes del horario programado ({early_leave_minutes} min).")
+            if entry_real is not None and exit_real > exit_dt:
+                overtime_hours = calculate_payable_overtime_hours(entry_real, exit_real, work_date, schedule)
+
+        worked_minutes = calculate_worked_minutes(entry_real, lunch_out_real, lunch_return_real, exit_real)
+        status = compose_status(absent=False, tardy_minutes=tardy_minutes, observations=observations)
+
+        employee_rows.append(
+            {
+                "Fecha": work_date.strftime("%Y-%m-%d"),
+                "Día": work_date.strftime("%A"),
+                "Horario": schedule.label,
+                "ID": employee_id,
+                "Nombre": employee_name,
+                "Entrada": f"~{display_time(entry_real)}" if entry_is_inferred and entry_real is not None else display_time(entry_real),
+                "Inicio comida": display_time(lunch_out_real),
+                "Fin comida": display_time(lunch_return_real),
+                "Salida": display_time(exit_real),
+                "Horas trabajadas": display_duration_minutes(worked_minutes),
+                "Retardo min": tardy_minutes,
+                "Comida min": lunch_minutes,
+                "Salida anticipada min": early_leave_minutes,
+                "Horas extra": overtime_hours,
+                "Estatus": status,
+                "Detalle": summarize_detail(" | ".join(observations)),
+            }
+        )
+
+    return pd.DataFrame(employee_rows)
 
 
 def build_summary_frame(result: RunResult) -> pd.DataFrame:
@@ -686,6 +954,20 @@ def sort_by_id(frame: pd.DataFrame) -> pd.DataFrame:
     sorted_frame["_id_sort"] = pd.to_numeric(sorted_frame["ID"], errors="coerce")
     sorted_frame["_id_sort"] = sorted_frame["_id_sort"].fillna(10**9)
     sorted_frame = sorted_frame.sort_values(["_id_sort", "ID"]).drop(columns="_id_sort")
+    return sorted_frame.reset_index(drop=True)
+
+
+def sort_by_date_and_id(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame.reset_index(drop=True)
+    sorted_frame = frame.copy()
+    sorted_frame["_fecha_sort"] = pd.to_datetime(sorted_frame.get("Fecha"), errors="coerce")
+    if "ID" in sorted_frame.columns:
+        sorted_frame["_id_sort"] = pd.to_numeric(sorted_frame["ID"], errors="coerce").fillna(10**9)
+        sorted_frame = sorted_frame.sort_values(["_fecha_sort", "_id_sort", "ID"])
+        sorted_frame = sorted_frame.drop(columns=["_fecha_sort", "_id_sort"])
+    else:
+        sorted_frame = sorted_frame.sort_values(["_fecha_sort"]).drop(columns="_fecha_sort")
     return sorted_frame.reset_index(drop=True)
 
 
@@ -1012,18 +1294,11 @@ def persist_result_outputs(result: RunResult) -> RunResult:
         "El reporte principal",
         before_retry=lambda: refresh_summary(result),
     )
-    result.log_file = write_with_fallback(
-        result.log_file,
-        lambda target: write_log(target, result),
-        result.issues,
-        "El archivo de log",
-    )
     return result
 
 
 def empty_result(
     report_file: Path,
-    log_file: Path,
     issues: list[RunIssue],
 ) -> RunResult:
     result = RunResult(
@@ -1046,7 +1321,7 @@ def empty_result(
         overtime_frame=pd.DataFrame(),
         report_file=report_file,
         overtime_report_file=None,
-        log_file=log_file,
+        log_file=None,
         issues=issues,
     )
     result.quick_view_frame = build_quick_view_frame(result.daily_frame)
@@ -1061,7 +1336,7 @@ def calculate_attendance(
 ) -> RunResult:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    report_file, log_file = build_output_paths(output_dir, overwrite)
+    report_file, _log_file = build_output_paths(output_dir, overwrite)
     overtime_report_file = build_output_path(output_dir, OVERTIME_REPORT_NAME, overwrite)
 
     issues: list[RunIssue] = []
@@ -1086,17 +1361,18 @@ def calculate_attendance(
     personal_std = standardize_columns(personal_raw, PERSONAL_COLUMN_ALIASES)
     events_std = standardize_columns(events_raw, EVENT_COLUMN_ALIASES)
 
+    issues.extend(detect_role_mismatch_issues(personal_std, events_std, "Eventos"))
     issues.extend(validate_required_columns(personal_std, REQUIRED_PERSONAL_COLUMNS, "Personal"))
     issues.extend(validate_required_columns(events_std, REQUIRED_EVENT_COLUMNS, "Eventos"))
     if any(issue.level == "error" for issue in issues):
-        return empty_result(report_file, log_file, issues)
+        return empty_result(report_file, issues)
 
     personal, excluded_invalid_ids = prepare_personal_frame(personal_std, issues)
     events = prepare_events_frame(events_std, issues)
     work_date = select_work_date(events, issues)
     if work_date is None:
         issues.append(RunIssue("error", "No se encontraron eventos válidos para analizar."))
-        return empty_result(report_file, log_file, issues)
+        return empty_result(report_file, issues)
 
     events = events[events["tiempo"].dt.date == work_date].copy().reset_index(drop=True)
     schedule = schedule_for_date(work_date, issues)
@@ -1113,140 +1389,7 @@ def calculate_attendance(
             )
         )
 
-    employee_rows: list[dict[str, object]] = []
-
-    entry_dt = combine_day_time(work_date, schedule.entry_time)
-    exit_dt = combine_day_time(work_date, schedule.exit_time)
-
-    for _, employee in personal.iterrows():
-        employee_id = employee["id_usuario"]
-        employee_name = employee["nombre_completo"]
-        employee_events = deduped_events[deduped_events["id_usuario"] == employee_id].copy().sort_values("tiempo")
-        observations: list[str] = []
-
-        if employee_events.empty:
-            observations.append("Sin checadas en el día.")
-            status = "Falta"
-            row = {
-                "ID": employee_id,
-                "Nombre": employee_name,
-                "Entrada": "",
-                "Inicio comida": "",
-                "Fin comida": "",
-                "Salida": "",
-                "Horas trabajadas": "",
-                "Retardo min": 0,
-                "Comida min": "",
-                "Salida anticipada min": "",
-                "Horas extra": 0,
-                "Estatus": status,
-                "Detalle": summarize_detail(" | ".join(observations)),
-            }
-            employee_rows.append(row)
-            continue
-
-        inferred_sequence = infer_three_punch_sequence(employee_events, work_date, schedule)
-        missing_slot: str | None = None
-        if inferred_sequence is not None:
-            slot_map = inferred_sequence["slot_map"]
-            missing_slot = str(inferred_sequence["missing_slot"])
-            entry_index = slot_map["entry"]
-            lunch_out_index = slot_map["lunch_out"]
-            lunch_return_index = slot_map["lunch_return"]
-            exit_index = slot_map["exit"]
-        else:
-            entry_index = int(employee_events.index[0])
-            lunch_out_index = find_lunch_out_index(employee_events, work_date, schedule)
-            lunch_return_index = find_lunch_return_index(employee_events, lunch_out_index, work_date, schedule)
-            start_for_exit = lunch_return_index
-            if start_for_exit is None:
-                start_for_exit = lunch_out_index
-            if start_for_exit is None:
-                start_for_exit = entry_index
-            exit_index = find_exit_index(employee_events, start_for_exit, work_date, schedule)
-
-        entry_is_inferred = missing_slot == "entry"
-        entry_real = combine_day_time(work_date, schedule.entry_time) if entry_is_inferred else (
-            employee_events.loc[entry_index, "tiempo"] if entry_index is not None else None
-        )
-        lunch_out_real = employee_events.loc[lunch_out_index, "tiempo"] if lunch_out_index is not None else None
-        lunch_return_real = (
-            employee_events.loc[lunch_return_index, "tiempo"] if lunch_return_index is not None else None
-        )
-        exit_real = employee_events.loc[exit_index, "tiempo"] if exit_index is not None else None
-
-        tardy_minutes = 0
-        if entry_real is not None and not entry_is_inferred and entry_real > entry_dt:
-            tardy_minutes = minutes_floor((entry_real - entry_dt).total_seconds())
-
-        lunch_minutes: int | str = ""
-        if missing_slot == "entry":
-            observations.append("Sin checada de entrada.")
-            observations.append("Secuencia inferida por patrón de 3 checadas.")
-        elif missing_slot == "lunch_out":
-            observations.append("Sin checada de salida a comida.")
-            observations.append("Secuencia inferida por patrón de 3 checadas.")
-        elif missing_slot == "lunch_return":
-            observations.append("Sin checada de regreso de comida.")
-            observations.append("Secuencia inferida por patrón de 3 checadas.")
-        elif missing_slot == "exit":
-            observations.append("Sin checada de salida final.")
-            observations.append("Secuencia inferida por patrón de 3 checadas.")
-        else:
-            if lunch_out_real is None:
-                observations.append("Sin checada de salida a comida.")
-            if lunch_out_real is not None and lunch_return_real is None:
-                observations.append("Sin checada de regreso de comida.")
-
-        if lunch_out_real is not None and lunch_return_real is not None:
-            lunch_minutes = minutes_floor((lunch_return_real - lunch_out_real).total_seconds())
-            if lunch_minutes < schedule.lunch_min_minutes:
-                pass
-            if lunch_minutes > schedule.lunch_max_minutes:
-                extra_lunch_minutes = lunch_minutes - schedule.lunch_max_minutes
-                observations.append(
-                    f"Tiempo de comida mayor al máximo permitido (+{extra_lunch_minutes} min)."
-                )
-
-        early_leave_minutes: int | str = ""
-        overtime_hours = 0
-        if exit_real is None and missing_slot != "exit":
-            observations.append("Sin checada de salida final.")
-        else:
-            if exit_real is not None and exit_real < exit_dt:
-                early_leave_minutes = minutes_floor((exit_dt - exit_real).total_seconds())
-                if early_leave_minutes > 0:
-                    observations.append(f"Salida antes del horario programado ({early_leave_minutes} min).")
-            if exit_real is not None and entry_real is not None and exit_real > exit_dt:
-                overtime_hours = calculate_payable_overtime_hours(entry_real, exit_real, work_date, schedule)
-
-        worked_minutes = calculate_worked_minutes(entry_real, lunch_out_real, lunch_return_real, exit_real)
-
-        status = compose_status(
-            absent=False,
-            tardy_minutes=tardy_minutes,
-            observations=observations,
-        )
-
-        employee_rows.append(
-            {
-                "ID": employee_id,
-                "Nombre": employee_name,
-                "Entrada": f"~{display_time(entry_real)}" if entry_is_inferred and entry_real is not None else display_time(entry_real),
-                "Inicio comida": display_time(lunch_out_real),
-                "Fin comida": display_time(lunch_return_real),
-                "Salida": display_time(exit_real),
-                "Horas trabajadas": display_duration_minutes(worked_minutes),
-                "Retardo min": tardy_minutes,
-                "Comida min": lunch_minutes,
-                "Salida anticipada min": early_leave_minutes,
-                "Horas extra": overtime_hours,
-                "Estatus": status,
-                "Detalle": summarize_detail(" | ".join(observations)),
-            }
-        )
-
-    full_employee_frame = pd.DataFrame(employee_rows)
+    full_employee_frame = analyze_operational_day(personal, deduped_events, work_date, schedule)
     daily_frame = build_daily_frame(full_employee_frame)
     absence_frame = build_absence_frame(daily_frame)
     tardy_frame = build_tardy_frame(daily_frame)
@@ -1287,7 +1430,484 @@ def calculate_attendance(
         overtime_frame=overtime_frame,
         report_file=report_file,
         overtime_report_file=final_overtime_report_file,
-        log_file=log_file,
+        log_file=None,
         issues=issues,
     )
     return persist_result_outputs(result)
+
+
+def build_range_summary_frame(result: RangeRunResult) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"Indicador": "Periodo analizado", "Valor": result.range_label},
+            {"Indicador": "Total de empleados", "Valor": result.total_employees},
+            {"Indicador": "Días laborales en rango", "Valor": result.workday_count},
+            {"Indicador": "Días con operación", "Valor": result.operational_day_count},
+            {"Indicador": "Días sin registros globales", "Valor": result.non_operational_day_count},
+            {"Indicador": "Corte parcial detectado", "Valor": "Sí" if result.partial_cutoff else "No"},
+            {"Indicador": "Asistencias", "Valor": result.attendance_count},
+            {"Indicador": "Retardos", "Valor": result.tardy_count},
+            {"Indicador": "Faltas", "Valor": result.absence_count},
+            {"Indicador": "Incidencias", "Valor": result.incident_employee_count},
+            {"Indicador": "Personal con horas extra", "Valor": result.overtime_employee_count},
+            {"Indicador": "Horas extra totales", "Valor": result.total_overtime_hours},
+            {"Indicador": "Observaciones globales", "Valor": len(result.issues)},
+        ]
+    )
+
+
+def build_range_alerts_frame(detail_frame: pd.DataFrame) -> pd.DataFrame:
+    if detail_frame.empty:
+        return pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Estatus", "Detalle", "Horas extra"])
+    neutral_statuses = {"Sin operación", "Pendiente"}
+    alert_mask = (
+        (detail_frame["Retardo min"].fillna(0) > 0)
+        | (detail_frame["Estatus"] == "Falta")
+        | ((detail_frame["Detalle"] != "") & ~detail_frame["Estatus"].isin(neutral_statuses))
+        | (detail_frame["Horas extra"].fillna(0) > 0)
+    )
+    frame = detail_frame.loc[alert_mask, ["Fecha", "ID", "Nombre", "Estatus", "Detalle", "Horas extra"]].copy()
+    return sort_by_date_and_id(frame)
+
+
+def build_range_detail_frame(full_frame: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "Fecha",
+        "Día",
+        "Horario",
+        "ID",
+        "Nombre",
+        "Entrada",
+        "Inicio comida",
+        "Fin comida",
+        "Salida",
+        "Horas trabajadas",
+        "Retardo min",
+        "Comida min",
+        "Salida anticipada min",
+        "Horas extra",
+        "Estatus",
+        "Detalle",
+    ]
+    return sort_by_date_and_id(full_frame[columns].copy())
+
+
+def build_range_preview_frame(detail_frame: pd.DataFrame) -> pd.DataFrame:
+    if detail_frame.empty:
+        return pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Entrada", "Salida", "Horas trabajadas", "Estatus", "Detalle"])
+    columns = ["Fecha", "ID", "Nombre", "Entrada", "Salida", "Horas trabajadas", "Horas extra", "Estatus", "Detalle"]
+    return sort_by_date_and_id(detail_frame[columns].copy())
+
+
+def build_range_overtime_summary_frame(detail_frame: pd.DataFrame) -> pd.DataFrame:
+    overtime_rows = detail_frame[detail_frame["Horas extra"].fillna(0) > 0].copy()
+    if overtime_rows.empty:
+        return pd.DataFrame(columns=["ID", "Nombre", "Días con horas extra", "Horas extra totales"])
+    summary = (
+        overtime_rows.groupby(["ID", "Nombre"], as_index=False)
+        .agg(**{"Días con horas extra": ("Fecha", "nunique"), "Horas extra totales": ("Horas extra", "sum")})
+        .reset_index(drop=True)
+    )
+    return sort_by_id(summary)
+
+
+def build_range_overtime_detail_frame(detail_frame: pd.DataFrame) -> pd.DataFrame:
+    overtime_rows = detail_frame[detail_frame["Horas extra"].fillna(0) > 0].copy()
+    if overtime_rows.empty:
+        return pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Salida", "Horas extra"])
+    return sort_by_date_and_id(overtime_rows[["Fecha", "ID", "Nombre", "Salida", "Horas extra"]].copy())
+
+
+def write_range_summary_sheet(writer: pd.ExcelWriter, result: RangeRunResult) -> None:
+    workbook = writer.book
+    worksheet = workbook.add_worksheet("Resumen")
+    writer.sheets["Resumen"] = worksheet
+
+    title_format = workbook.add_format({"bold": True, "font_size": 16, "font_color": "#0F3B78"})
+    subtitle_format = workbook.add_format({"font_color": "#4B6482"})
+    metric_label = workbook.add_format({"bold": True, "bg_color": "#EDF3FB", "border": 1})
+    metric_value = workbook.add_format({"border": 1})
+    section_format = workbook.add_format({"bold": True, "bg_color": "#DCE9FF", "border": 1})
+    header_format = workbook.add_format({"bold": True, "bg_color": "#1F2A44", "font_color": "#FFFFFF", "border": 1})
+    cell_format = workbook.add_format({"border": 1, "valign": "top"})
+    wrap_format = workbook.add_format({"border": 1, "valign": "top", "text_wrap": True})
+
+    worksheet.write(0, 0, "Reporte por rango de asistencia", title_format)
+    worksheet.write(1, 0, f"Periodo: {result.range_label}", subtitle_format)
+    worksheet.write(2, 0, "Se excluyen domingos y los días sin registros globales no se cuentan como falta.", subtitle_format)
+
+    for row_index, row in enumerate(result.summary_frame.itertuples(index=False), start=4):
+        worksheet.write(row_index, 0, row[0], metric_label)
+        worksheet.write(row_index, 1, row[1], metric_value)
+
+    next_row = 4 + len(result.summary_frame) + 2
+    next_row = write_frame_block(
+        worksheet,
+        next_row,
+        "Alertas del periodo",
+        result.alerts_frame,
+        section_format,
+        header_format,
+        cell_format,
+        wrap_format,
+    )
+    global_issues = pd.DataFrame([{"Observación global": issue.message} for issue in result.issues])
+    write_frame_block(
+        worksheet,
+        next_row,
+        "Observaciones globales",
+        global_issues,
+        section_format,
+        header_format,
+        cell_format,
+        wrap_format,
+    )
+    worksheet.set_column(0, 0, 28)
+    worksheet.set_column(1, 4, 28)
+
+
+def write_range_historical_sheet(writer: pd.ExcelWriter, result: RangeRunResult) -> None:
+    workbook = writer.book
+    worksheet = workbook.add_worksheet("Vista histórica")
+    writer.sheets["Vista histórica"] = worksheet
+
+    title_format = workbook.add_format({"bold": True, "font_size": 15, "font_color": "#FFFFFF", "bg_color": "#162033"})
+    block_label = workbook.add_format({"bold": True, "bg_color": "#1F2A44", "font_color": "#FFFFFF", "border": 1})
+    name_label = workbook.add_format({"bold": True, "bg_color": "#0F3B78", "font_color": "#FFFFFF", "border": 1})
+    date_format = workbook.add_format({"bold": True, "bg_color": "#EEF3FA", "border": 1, "align": "center", "valign": "vcenter"})
+    value_format = workbook.add_format({"border": 1, "text_wrap": True, "valign": "top"})
+    status_falta = workbook.add_format({"border": 1, "bg_color": "#7A2048", "font_color": "#FFFFFF", "bold": True})
+    status_retardo = workbook.add_format({"border": 1, "bg_color": "#D94841", "font_color": "#FFFFFF", "bold": True})
+    status_incidencia = workbook.add_format({"border": 1, "bg_color": "#F3B63A", "font_color": "#000000", "bold": True})
+    status_puntual = workbook.add_format({"border": 1, "bg_color": "#DCEBD3", "font_color": "#1D4D2F", "bold": True})
+    status_neutral = workbook.add_format({"border": 1, "bg_color": "#E5E7EB", "font_color": "#374151", "bold": True})
+    status_pending = workbook.add_format({"border": 1, "bg_color": "#DBEAFE", "font_color": "#1D4ED8", "bold": True})
+
+    detail_frame = result.detail_frame.copy()
+    worksheet.merge_range(0, 0, 0, QUICK_VIEW_BLOCK_SIZE + 1, "Vista histórica por rango", title_format)
+    worksheet.write(1, 0, f"Periodo: {result.range_label}")
+
+    unique_dates = sorted(detail_frame["Fecha"].unique().tolist()) if not detail_frame.empty else []
+    employee_meta = sort_by_id(detail_frame[["ID", "Nombre"]].drop_duplicates())
+    lookup = {
+        (row["Fecha"], str(row["ID"])): row
+        for _, row in detail_frame.iterrows()
+    }
+
+    block_start_row = 3
+    detail_rows = [
+        ("ENTRADA", "Entrada"),
+        ("INICIO COMIDA", "Inicio comida"),
+        ("FIN COMIDA", "Fin comida"),
+        ("SALIDA", "Salida"),
+        ("HORAS TRABAJADAS", "Horas trabajadas"),
+        ("HORAS EXTRA", "Horas extra"),
+        ("ESTATUS", "Estatus"),
+        ("DETALLE", "Detalle"),
+    ]
+    placeholder_fields = {"Entrada", "Inicio comida", "Fin comida", "Salida", "Horas trabajadas", "Horas extra"}
+
+    for start in range(0, len(employee_meta), QUICK_VIEW_BLOCK_SIZE):
+        chunk = employee_meta.iloc[start : start + QUICK_VIEW_BLOCK_SIZE].reset_index(drop=True)
+        header_row = block_start_row
+        worksheet.write(header_row, 0, "FECHA", block_label)
+        worksheet.write(header_row, 1, "CAMPO", block_label)
+        for offset in range(QUICK_VIEW_BLOCK_SIZE):
+            column = offset + 2
+            if offset < len(chunk):
+                worksheet.write(header_row, column, str(chunk.loc[offset, "ID"]), block_label)
+            else:
+                worksheet.write(header_row, column, "", block_label)
+
+        name_row = header_row + 1
+        worksheet.write(name_row, 1, "NOMBRE", name_label)
+        for offset in range(QUICK_VIEW_BLOCK_SIZE):
+            column = offset + 2
+            if offset < len(chunk):
+                worksheet.write(name_row, column, chunk.loc[offset, "Nombre"], value_format)
+            else:
+                worksheet.write(name_row, column, "", value_format)
+
+        current_row = name_row + 1
+        for day_label in unique_dates:
+            date_start_row = current_row
+            date_end_row = current_row + len(detail_rows) - 1
+            worksheet.merge_range(date_start_row, 0, date_end_row, 0, day_label, date_format)
+            for row_offset, (label, field) in enumerate(detail_rows):
+                row_idx = current_row + row_offset
+                worksheet.write(row_idx, 1, label, block_label)
+                for offset in range(QUICK_VIEW_BLOCK_SIZE):
+                    column = offset + 2
+                    if offset >= len(chunk):
+                        worksheet.write(row_idx, column, "", value_format)
+                        continue
+                    employee_id = str(chunk.loc[offset, "ID"])
+                    row = lookup.get((day_label, employee_id))
+                    value = "" if row is None else row[field]
+                    if pd.isna(value):
+                        value = ""
+                    if field in placeholder_fields and str(value).strip() == "":
+                        value = "--"
+                    if field == "Horas extra" and str(value).strip() not in ("", "--", "0", "0.0"):
+                        value = f"{int(value)} h"
+                    if field == "Estatus":
+                        text = str(value)
+                        if text == "Sin operación":
+                            fmt = status_neutral
+                        elif text == "Pendiente":
+                            fmt = status_pending
+                        elif "Falta" in text:
+                            fmt = status_falta
+                        elif "Retardo" in text:
+                            fmt = status_retardo
+                        elif "Incidencia" in text:
+                            fmt = status_incidencia
+                        else:
+                            fmt = status_puntual
+                        worksheet.write(row_idx, column, value, fmt)
+                    else:
+                        worksheet.write(row_idx, column, value, value_format)
+            current_row = date_end_row + 1
+
+        block_start_row = current_row + 2
+
+    worksheet.set_column(0, 0, 14)
+    worksheet.set_column(1, 1, 22)
+    worksheet.set_column(2, QUICK_VIEW_BLOCK_SIZE + 1, 28)
+    worksheet.freeze_panes(5, 2)
+
+
+def write_range_report(path: Path, result: RangeRunResult) -> None:
+    with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
+        write_range_summary_sheet(writer, result)
+        write_range_historical_sheet(writer, result)
+        write_standard_sheet(writer, "Alertas del periodo", result.alerts_frame)
+        write_standard_sheet(writer, "Detalle consolidado", result.detail_frame)
+
+
+def write_range_overtime_report(path: Path, result: RangeRunResult) -> None:
+    with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
+        write_standard_sheet(writer, "Resumen", result.overtime_summary_frame)
+        write_standard_sheet(writer, "Detalle", result.overtime_detail_frame)
+
+
+def write_range_log(path: Path, result: RangeRunResult) -> None:
+    lines = [
+        f"Periodo analizado: {result.range_label}",
+        f"Total empleados: {result.total_employees}",
+        f"Días laborales: {result.workday_count}",
+        f"Días con operación: {result.operational_day_count}",
+        f"Días sin registros globales: {result.non_operational_day_count}",
+        f"Corte parcial: {'Sí' if result.partial_cutoff else 'No'}",
+        f"Asistencias: {result.attendance_count}",
+        f"Retardos: {result.tardy_count}",
+        f"Faltas: {result.absence_count}",
+        f"Incidencias: {result.incident_employee_count}",
+        f"Personal con horas extra: {result.overtime_employee_count}",
+        f"Horas extra totales: {result.total_overtime_hours}",
+        "",
+        "Observaciones globales:",
+    ]
+    if result.issues:
+        for issue in result.issues:
+            lines.append(f"- [{issue.level.upper()}] {issue.message}")
+    else:
+        lines.append("- Ninguna")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def persist_range_result_outputs(result: RangeRunResult) -> RangeRunResult:
+    if result.overtime_report_file is not None:
+        result.overtime_report_file = write_with_fallback(
+            result.overtime_report_file,
+            lambda target: write_range_overtime_report(target, result),
+            result.issues,
+            "El reporte de horas extra por rango",
+        )
+
+    result.summary_frame = build_range_summary_frame(result)
+    result.report_file = write_with_fallback(
+        result.report_file,
+        lambda target: write_range_report(target, result),
+        result.issues,
+        "El reporte principal por rango",
+        before_retry=lambda: setattr(result, "summary_frame", build_range_summary_frame(result)),
+    )
+    return result
+
+
+def empty_range_result(report_file: Path, overtime_report_file: Path, issues: list[RunIssue]) -> RangeRunResult:
+    result = RangeRunResult(
+        start_date=None,
+        end_date=None,
+        range_label="No determinado",
+        total_employees=0,
+        workday_count=0,
+        operational_day_count=0,
+        non_operational_day_count=0,
+        partial_cutoff=False,
+        attendance_count=0,
+        tardy_count=0,
+        absence_count=0,
+        incident_employee_count=0,
+        overtime_employee_count=0,
+        total_overtime_hours=0,
+        summary_frame=pd.DataFrame(columns=["Indicador", "Valor"]),
+        historical_preview_frame=pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Entrada", "Salida", "Horas trabajadas", "Estatus", "Detalle"]),
+        alerts_frame=pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Estatus", "Detalle", "Horas extra"]),
+        detail_frame=pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Entrada", "Salida", "Estatus", "Detalle"]),
+        overtime_summary_frame=pd.DataFrame(columns=["ID", "Nombre", "Días con horas extra", "Horas extra totales"]),
+        overtime_detail_frame=pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Salida", "Horas extra"]),
+        report_file=report_file,
+        overtime_report_file=None,
+        log_file=None,
+        issues=issues,
+    )
+    result.summary_frame = build_range_summary_frame(result)
+    return persist_range_result_outputs(result)
+
+
+def calculate_attendance_range(
+    personal_path: str | Path,
+    range_events_path: str | Path,
+    output_dir: str | Path,
+    overwrite: bool = True,
+) -> RangeRunResult:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_file, overtime_report_file, _log_file = build_range_output_paths(output_dir, overwrite)
+    issues: list[RunIssue] = []
+
+    personal_raw, personal_sheet = load_table(personal_path, SHEET_NAME)
+    events_raw, events_sheet = load_table(range_events_path, SHEET_NAME)
+    if personal_sheet != SHEET_NAME:
+        issues.append(RunIssue("warning", f"El archivo de personal no tenía la hoja '{SHEET_NAME}'. Se usó '{personal_sheet}'."))
+    if events_sheet != SHEET_NAME:
+        issues.append(RunIssue("warning", f"El archivo de rango no tenía la hoja '{SHEET_NAME}'. Se usó '{events_sheet}'."))
+
+    personal_std = standardize_columns(personal_raw, PERSONAL_COLUMN_ALIASES)
+    events_std = standardize_columns(events_raw, EVENT_COLUMN_ALIASES)
+    issues.extend(detect_role_mismatch_issues(personal_std, events_std, "Rango"))
+    issues.extend(validate_required_columns(personal_std, REQUIRED_PERSONAL_COLUMNS, "Personal"))
+    issues.extend(validate_required_columns(events_std, REQUIRED_EVENT_COLUMNS, "Rango"))
+    if any(issue.level == "error" for issue in issues):
+        return empty_range_result(report_file, overtime_report_file, issues)
+
+    personal, excluded_invalid_ids = prepare_personal_frame(personal_std, issues)
+    events = prepare_events_frame(events_std, issues)
+    if events.empty:
+        issues.append(RunIssue("error", "No se encontraron eventos válidos para analizar en el rango."))
+        return empty_range_result(report_file, overtime_report_file, issues)
+
+    min_date = events["tiempo"].dt.date.min()
+    max_date = events["tiempo"].dt.date.max()
+    work_dates = [single_date for single_date in pd.date_range(min_date, max_date, freq="D").date if single_date.weekday() != 6]
+    if not work_dates:
+        issues.append(RunIssue("error", "El rango no contiene días laborales analizables."))
+        return empty_range_result(report_file, overtime_report_file, issues)
+
+    known_ids = set(personal["id_usuario"].tolist())
+    unknown_ids = sorted(
+        set(events["id_usuario"].tolist()) - known_ids - excluded_invalid_ids,
+        key=lambda value: int(value) if str(value).isdigit() else str(value),
+    )
+    if unknown_ids:
+        issues.append(
+            RunIssue(
+                "warning",
+                "Se detectaron eventos de usuarios que no existen en la BBDD de personal: " + ", ".join(unknown_ids),
+            )
+        )
+
+    all_day_frames: list[pd.DataFrame] = []
+    operational_day_count = 0
+    non_operational_day_count = 0
+    partial_cutoff = False
+    last_work_date = work_dates[-1]
+
+    for single_date in work_dates:
+        schedule = schedule_for_date(single_date, issues)
+        day_events = events[events["tiempo"].dt.date == single_date].copy().reset_index(drop=True)
+        if day_events.empty:
+            non_operational_day_count += 1
+            all_day_frames.append(
+                build_non_operational_day_rows(
+                    personal,
+                    single_date,
+                    schedule,
+                    "Sin registros globales / posible día no laborable",
+                )
+            )
+            continue
+
+        operational_day_count += 1
+        deduped_day_events, _removed_counts = dedupe_events(day_events)
+        cutoff_time: datetime | None = None
+        day_last_event = deduped_day_events["tiempo"].max()
+        if single_date == last_work_date and day_last_event < combine_day_time(single_date, schedule.exit_time):
+            cutoff_time = day_last_event
+            partial_cutoff = True
+        all_day_frames.append(
+            analyze_operational_day(personal, deduped_day_events, single_date, schedule, cutoff_time=cutoff_time)
+        )
+
+    if partial_cutoff:
+        issues.append(
+            RunIssue(
+                "warning",
+                f"Se detectó corte parcial en la última fecha del rango ({last_work_date.strftime('%Y-%m-%d')}).",
+            )
+        )
+    if non_operational_day_count:
+        issues.append(
+            RunIssue(
+                "warning",
+                f"Se detectaron {non_operational_day_count} día(s) laborales sin registros globales. Se marcaron como sin operación.",
+            )
+        )
+
+    full_range_frame = pd.concat(all_day_frames, ignore_index=True) if all_day_frames else pd.DataFrame()
+    detail_frame = build_range_detail_frame(full_range_frame)
+    preview_frame = build_range_preview_frame(detail_frame)
+    alerts_frame = build_range_alerts_frame(detail_frame)
+    overtime_summary_frame = build_range_overtime_summary_frame(detail_frame)
+    overtime_detail_frame = build_range_overtime_detail_frame(detail_frame)
+
+    active_statuses = {"Puntual", "Retardo", "Retardo + incidencia", "Incidencia"}
+    attendance_count = int(detail_frame["Estatus"].isin(active_statuses).sum())
+    tardy_count = int((detail_frame["Retardo min"].fillna(0) > 0).sum())
+    absence_count = int((detail_frame["Estatus"] == "Falta").sum())
+    incident_employee_count = int(
+        ((detail_frame["Detalle"] != "") & ~detail_frame["Estatus"].isin({"Falta", "Sin operación", "Pendiente"})).sum()
+    )
+    overtime_employee_count = int(overtime_summary_frame["ID"].nunique()) if not overtime_summary_frame.empty else 0
+    total_overtime_hours = int(detail_frame["Horas extra"].fillna(0).sum())
+
+    result = RangeRunResult(
+        start_date=min_date,
+        end_date=max_date,
+        range_label=f"{min_date.strftime('%Y-%m-%d')} a {max_date.strftime('%Y-%m-%d')}",
+        total_employees=len(personal),
+        workday_count=len(work_dates),
+        operational_day_count=operational_day_count,
+        non_operational_day_count=non_operational_day_count,
+        partial_cutoff=partial_cutoff,
+        attendance_count=attendance_count,
+        tardy_count=tardy_count,
+        absence_count=absence_count,
+        incident_employee_count=incident_employee_count,
+        overtime_employee_count=overtime_employee_count,
+        total_overtime_hours=total_overtime_hours,
+        summary_frame=pd.DataFrame(columns=["Indicador", "Valor"]),
+        historical_preview_frame=preview_frame,
+        alerts_frame=alerts_frame,
+        detail_frame=detail_frame,
+        overtime_summary_frame=overtime_summary_frame,
+        overtime_detail_frame=overtime_detail_frame,
+        report_file=report_file,
+        overtime_report_file=overtime_report_file if not overtime_detail_frame.empty else None,
+        log_file=None,
+        issues=issues,
+    )
+    result.summary_frame = build_range_summary_frame(result)
+    return persist_range_result_outputs(result)

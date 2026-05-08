@@ -9,8 +9,11 @@ from ctypes import wintypes
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from attendance.core import RunResult, calculate_attendance
+from attendance.core import RangeRunResult, RunIssue, RunResult, calculate_attendance, calculate_attendance_range
 from attendance.version import __version__
+
+
+ResultType = RunResult | RangeRunResult
 
 
 class LinherAttendanceApp(tk.Tk):
@@ -18,16 +21,17 @@ class LinherAttendanceApp(tk.Tk):
         self._set_windows_app_id()
         super().__init__()
         self.withdraw()
-        self.title(f"LINHER Attendance | Control diario (v{__version__})")
+        self.title(f"LINHER Attendance | Control de asistencia (v{__version__})")
         self._apply_window_icon()
 
         self.personal_path = tk.StringVar(value="")
         self.events_path = tk.StringVar(value="")
+        self.range_path = tk.StringVar(value="")
         self.output_dir = tk.StringVar(value="")
         self.overwrite = tk.BooleanVar(value=False)
 
         self.last_dir = Path.home()
-        self.result: RunResult | None = None
+        self.result: ResultType | None = None
         self.report_file: Path | None = None
         self.overtime_report_file: Path | None = None
         self.log_file: Path | None = None
@@ -76,13 +80,13 @@ class LinherAttendanceApp(tk.Tk):
         style.configure("HeroText.TLabel", font=("Segoe UI", 10), foreground="#36574D")
 
     def _configure_window(self):
-        width = 1220
-        height = 860
+        width = 1240
+        height = 880
         work_area = self._get_work_area()
         if work_area:
             left, top, right, bottom = work_area
-            available_width = max(960, right - left)
-            available_height = max(720, bottom - top)
+            available_width = max(980, right - left)
+            available_height = max(740, bottom - top)
             width = min(width, available_width - 60)
             height = min(height, available_height - 60)
             x = left + max(0, (available_width - width) // 2)
@@ -90,7 +94,7 @@ class LinherAttendanceApp(tk.Tk):
             self.geometry(f"{width}x{height}+{x}+{y}")
         else:
             self.geometry(f"{width}x{height}")
-        self.minsize(1080, 760)
+        self.minsize(1100, 780)
 
     def _get_work_area(self):
         if os.name != "nt":
@@ -110,14 +114,14 @@ class LinherAttendanceApp(tk.Tk):
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
 
-        ttk.Label(header, text="Control Diario de Asistencia", style="Title.TLabel").grid(
+        ttk.Label(header, text="Centro de Control de Asistencia", style="Title.TLabel").grid(
             row=0, column=0, sticky="w"
         )
         ttk.Label(
             header,
             text=(
-                "Carga los archivos del checador para generar un corte claro del día: faltas, "
-                "retardos, omisiones de checada, salidas anticipadas y horas extra pagables."
+                "Analiza exportaciones del checador en modo diario o por rango para generar cortes claros "
+                "de asistencia, retardos, omisiones de checada, salidas anticipadas y horas extra pagables."
             ),
             style="Subtitle.TLabel",
             wraplength=1080,
@@ -125,7 +129,7 @@ class LinherAttendanceApp(tk.Tk):
         ).grid(row=1, column=0, sticky="w", pady=(8, 0))
         ttk.Label(
             header,
-            text="Flujo sugerido: 1. Cargar archivos  2. Ejecutar análisis  3. Compartir la Vista rápida",
+            text="Flujo sugerido: 1. Elegir modo  2. Cargar archivos  3. Ejecutar análisis  4. Compartir el reporte",
             style="Subtitle.TLabel",
         ).grid(row=2, column=0, sticky="w", pady=(8, 0))
 
@@ -142,7 +146,7 @@ class LinherAttendanceApp(tk.Tk):
         self._build_input_panel(sidebar)
         self._build_action_panel(sidebar)
 
-        guide_panel = ttk.LabelFrame(sidebar, text="Qué se vigila", style="Section.TLabelframe", padding=12)
+        guide_panel = ttk.LabelFrame(sidebar, text="Qué vigila el sistema", style="Section.TLabelframe", padding=12)
         guide_panel.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         ttk.Label(
             guide_panel,
@@ -153,8 +157,10 @@ class LinherAttendanceApp(tk.Tk):
                 "- checadas faltantes\n"
                 "- salida anticipada\n"
                 "- comida excedida\n\n"
-                "No se eleva como alerta:\n"
-                "- comida menor al mínimo"
+                "También ayuda a detectar:\n"
+                "- archivos invertidos\n"
+                "- corte parcial\n"
+                "- días sin registros globales"
             ),
             justify="left",
             style="Subtitle.TLabel",
@@ -165,7 +171,7 @@ class LinherAttendanceApp(tk.Tk):
         content.columnconfigure(0, weight=1)
         content.rowconfigure(2, weight=1)
 
-        result_block = ttk.LabelFrame(content, text="Corte del día", style="Section.TLabelframe", padding=12)
+        result_block = ttk.LabelFrame(content, text="Resultado", style="Section.TLabelframe", padding=12)
         result_block.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         result_block.columnconfigure(0, weight=1)
 
@@ -174,14 +180,14 @@ class LinherAttendanceApp(tk.Tk):
         hero.columnconfigure(0, weight=1)
         self.hero_title = ttk.Label(
             hero,
-            text="Carga personal y eventos para iniciar el análisis.",
+            text="Carga los archivos para iniciar el análisis.",
             style="HeroTitle.TLabel",
         )
         self.hero_text = ttk.Label(
             hero,
             text=(
-                "Aquí verás con rapidez la fecha analizada, el tamaño de la plantilla, las faltas, "
-                "los retardos y las alertas que sí requieren seguimiento."
+                "Aquí verás el corte del modo activo, los totales importantes y las alertas que "
+                "sí requieren seguimiento."
             ),
             style="HeroText.TLabel",
             wraplength=1080,
@@ -196,7 +202,7 @@ class LinherAttendanceApp(tk.Tk):
             metrics.columnconfigure(column_index, weight=1)
 
         self.metric_cards = {
-            "empleados": self._create_metric_card(metrics, 0, "0", "Plantilla válida"),
+            "empleados": self._create_metric_card(metrics, 0, "0", "Plantilla valida"),
             "asistencias": self._create_metric_card(metrics, 1, "0", "Presentes"),
             "retardos": self._create_metric_card(metrics, 2, "0", "Retardos"),
             "faltas": self._create_metric_card(metrics, 3, "0", "Faltas"),
@@ -212,12 +218,13 @@ class LinherAttendanceApp(tk.Tk):
         self.notebook.grid(row=0, column=0, sticky="nsew")
 
         self.trees: dict[str, ttk.Treeview] = {}
+        self._add_tree_tab("resumen", "Resumen")
         self._add_tree_tab("vista", "Vista rápida")
         self._add_tree_tab("faltas", "Faltas")
         self._add_tree_tab("retardos", "Retardos")
         self._add_tree_tab("incidencias", "Incidencias")
         self._add_tree_tab("detalle", "Detalle diario")
-        self._add_tree_tab("resumen", "Resumen")
+        self._set_daily_result_tabs()
 
         status_bar = ttk.Frame(content, padding=(0, 10, 0, 0))
         status_bar.grid(row=3, column=0, sticky="ew")
@@ -231,42 +238,70 @@ class LinherAttendanceApp(tk.Tk):
     def _build_input_panel(self, parent: ttk.Frame):
         panel = ttk.LabelFrame(parent, text="Carga de archivos", style="Section.TLabelframe", padding=12)
         panel.grid(row=0, column=0, sticky="ew")
-        panel.columnconfigure(1, weight=1)
+        panel.columnconfigure(0, weight=1)
 
-        ttk.Label(panel, text="Personal").grid(row=0, column=0, sticky="w", pady=(2, 10))
-        ttk.Entry(panel, textvariable=self.personal_path).grid(row=0, column=1, sticky="ew", padx=(12, 8))
-        ttk.Button(panel, text="Seleccionar...", command=self.pick_personal).grid(row=0, column=2, sticky="ew")
+        self.input_notebook = ttk.Notebook(panel)
+        self.input_notebook.grid(row=0, column=0, sticky="ew")
+        self.input_notebook.bind("<<NotebookTabChanged>>", self._on_mode_tab_changed)
 
-        ttk.Label(panel, text="Eventos del día").grid(row=1, column=0, sticky="w", pady=(2, 10))
-        ttk.Entry(panel, textvariable=self.events_path).grid(row=1, column=1, sticky="ew", padx=(12, 8))
-        ttk.Button(panel, text="Seleccionar...", command=self.pick_events).grid(row=1, column=2, sticky="ew")
-
-        ttk.Label(panel, text="Carpeta de salida").grid(row=2, column=0, sticky="w", pady=(2, 8))
-        ttk.Entry(panel, textvariable=self.output_dir).grid(row=2, column=1, sticky="ew", padx=(12, 8))
-        ttk.Button(panel, text="Seleccionar...", command=self.pick_output_dir).grid(row=2, column=2, sticky="ew")
-
+        daily_tab = ttk.Frame(self.input_notebook, padding=(4, 6, 4, 6))
+        daily_tab.columnconfigure(1, weight=1)
+        self.input_notebook.add(daily_tab, text="Diario")
+        self._build_file_row(daily_tab, 0, "Personal", self.personal_path, self.pick_personal)
+        self._build_file_row(daily_tab, 1, "Eventos del día", self.events_path, self.pick_events)
+        self._build_file_row(daily_tab, 2, "Carpeta de salida", self.output_dir, self.pick_output_dir)
         ttk.Label(
-            panel,
+            daily_tab,
             text=(
-                "Se leen directo los .xls del checador. Si pegas rutas manualmente, la app las respeta."
+                "Usa la BBDD de personal y el archivo del día. Si cargas archivos invertidos, "
+                "la app te avisará antes de dejarte con un corte vacío."
             ),
             foreground="#4B6482",
             wraplength=300,
             justify="left",
         ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
+        range_tab = ttk.Frame(self.input_notebook, padding=(4, 6, 4, 6))
+        range_tab.columnconfigure(1, weight=1)
+        self.input_notebook.add(range_tab, text="Rango")
+        self._build_file_row(range_tab, 0, "Personal", self.personal_path, self.pick_personal)
+        self._build_file_row(range_tab, 1, "Archivo de rango", self.range_path, self.pick_range)
+        self._build_file_row(range_tab, 2, "Carpeta de salida", self.output_dir, self.pick_output_dir)
+        ttk.Label(
+            range_tab,
+            text=(
+                "El modo Rango toma la fecha mínima y máxima del archivo, excluye domingos e incluye "
+                "corte parcial o días sin registros globales cuando aplique."
+            ),
+            foreground="#4B6482",
+            wraplength=300,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+    def _build_file_row(
+        self,
+        parent: ttk.Frame,
+        row: int,
+        label: str,
+        variable: tk.StringVar,
+        command,
+    ):
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=(2, 10))
+        ttk.Entry(parent, textvariable=variable).grid(row=row, column=1, sticky="ew", padx=(12, 8))
+        ttk.Button(parent, text="Seleccionar...", command=command).grid(row=row, column=2, sticky="ew")
+
     def _build_action_panel(self, parent: ttk.Frame):
         panel = ttk.LabelFrame(parent, text="Ejecución", style="Section.TLabelframe", padding=12)
         panel.grid(row=1, column=0, sticky="ew", pady=(12, 0))
         panel.columnconfigure(0, weight=1)
 
-        ttk.Label(panel, text="Configuración del reporte diario").grid(
-            row=0, column=0, sticky="w", pady=(0, 10)
+        self.execution_label = ttk.Label(panel, text="Configuración del reporte diario")
+        self.execution_label.grid(row=0, column=0, sticky="w", pady=(0, 10))
+        ttk.Checkbutton(panel, text="Sobrescribir si existe", variable=self.overwrite).grid(
+            row=1, column=0, sticky="w", pady=(0, 14)
         )
-        ttk.Checkbutton(panel, text="Sobrescribir si existe", variable=self.overwrite).grid(row=1, column=0, sticky="w", pady=(0, 14))
-        ttk.Button(panel, text="Analizar asistencia", command=self.run_analysis).grid(
-            row=2, column=0, sticky="ew", pady=(0, 12)
-        )
+        self.run_button = ttk.Button(panel, text="Analizar asistencia diaria", command=self.run_analysis)
+        self.run_button.grid(row=2, column=0, sticky="ew", pady=(0, 12))
         ttk.Button(panel, text="Restablecer", command=self.reset_form).grid(
             row=3, column=0, sticky="ew", pady=(0, 8)
         )
@@ -276,7 +311,7 @@ class LinherAttendanceApp(tk.Tk):
         ttk.Label(
             panel,
             text=(
-                "El reporte destacará faltas, retardos, omisiones de checada, comida excedida y salida anticipada. "
+                "El reporte resaltará faltas, retardos, omisiones de checada, comida excedida y salida anticipada. "
                 "Las horas extra se generan por separado y solo cuentan después de cumplir la jornada."
             ),
             foreground="#4B6482",
@@ -292,7 +327,7 @@ class LinherAttendanceApp(tk.Tk):
         caption_label = ttk.Label(card, text=caption, style="MetricCaption.TLabel", wraplength=180, justify="left")
         value_label.grid(row=0, column=0, sticky="w", pady=(0, 10))
         caption_label.grid(row=1, column=0, sticky="w")
-        return value_label
+        return {"value": value_label, "caption": caption_label}
 
     def _add_tree_tab(self, key: str, label: str):
         frame = ttk.Frame(self.notebook, padding=10)
@@ -308,15 +343,51 @@ class LinherAttendanceApp(tk.Tk):
         self.notebook.add(frame, text=label)
         self.trees[key] = tree
 
+    def _set_daily_result_tabs(self):
+        self.notebook.tab(0, text="Resumen")
+        self.notebook.tab(1, text="Vista rápida")
+        self.notebook.tab(2, text="Faltas")
+        self.notebook.tab(3, text="Retardos")
+        self.notebook.tab(4, text="Incidencias")
+        self.notebook.tab(5, text="Detalle diario")
+
+    def _set_range_result_tabs(self):
+        self.notebook.tab(0, text="Resumen")
+        self.notebook.tab(1, text="Vista histórica")
+        self.notebook.tab(2, text="Alertas")
+        self.notebook.tab(3, text="Horas extra (resumen)")
+        self.notebook.tab(4, text="Horas extra (detalle)")
+        self.notebook.tab(5, text="Detalle consolidado")
+
+    def _get_current_mode(self) -> str:
+        current_index = self.input_notebook.index(self.input_notebook.select())
+        return "daily" if current_index == 0 else "range"
+
+    def _on_mode_tab_changed(self, _event=None):
+        mode = self._get_current_mode()
+        if mode == "daily":
+            self.execution_label.configure(text="Configuración del reporte diario")
+            self.run_button.configure(text="Analizar asistencia diaria")
+            self._set_daily_result_tabs()
+        else:
+            self.execution_label.configure(text="Configuración del reporte por rango")
+            self.run_button.configure(text="Analizar rango")
+            self._set_range_result_tabs()
+
     def pick_personal(self):
         path = self._pick_file("Selecciona el archivo de personal")
         if path:
             self.personal_path.set(path)
 
     def pick_events(self):
-        path = self._pick_file("Selecciona el archivo de eventos")
+        path = self._pick_file("Selecciona el archivo de eventos del día")
         if path:
             self.events_path.set(path)
+
+    def pick_range(self):
+        path = self._pick_file("Selecciona el archivo de rango")
+        if path:
+            self.range_path.set(path)
 
     def pick_output_dir(self):
         try:
@@ -344,21 +415,20 @@ class LinherAttendanceApp(tk.Tk):
     def reset_form(self):
         self.personal_path.set("")
         self.events_path.set("")
+        self.range_path.set("")
         self.output_dir.set("")
         self.overwrite.set(False)
         self.result = None
         self.report_file = None
         self.overtime_report_file = None
         self.log_file = None
-        self.hero_title.configure(text="Carga personal y eventos para iniciar el análisis.")
+        self.hero_title.configure(text="Carga los archivos para iniciar el análisis.")
         self.hero_text.configure(
-            text=(
-                "Aquí verás con rapidez la fecha analizada, el tamaño de la plantilla, las faltas, "
-                "los retardos y las alertas que sí requieren seguimiento."
-            )
+            text="Aquí verás el corte del modo activo, los totales importantes y las alertas que sí requieren seguimiento."
         )
-        for label in self.metric_cards.values():
-            label.configure(text="0")
+        self._set_metric_values("0", "0", "0", "0", "0")
+        self._set_metric_captions("Plantilla valida", "Presentes", "Retardos", "Faltas", "Alertas")
+        self._set_daily_result_tabs()
         for tree in self.trees.values():
             tree.delete(*tree.get_children())
             tree.configure(columns=())
@@ -377,46 +447,74 @@ class LinherAttendanceApp(tk.Tk):
             messagebox.showerror("No se pudo abrir la carpeta", str(exc))
 
     def run_analysis(self):
+        mode = self._get_current_mode()
         personal_path = self.personal_path.get().strip()
-        events_path = self.events_path.get().strip()
         output_dir = self.output_dir.get().strip()
-        if not personal_path or not events_path or not output_dir:
+        data_path = self.events_path.get().strip() if mode == "daily" else self.range_path.get().strip()
+
+        if not personal_path or not data_path or not output_dir:
+            required_label = "el archivo de eventos del día" if mode == "daily" else "el archivo de rango"
             messagebox.showwarning(
                 "Faltan datos",
-                "Debes seleccionar el archivo de personal, el archivo de eventos y la carpeta de salida.",
+                f"Debes seleccionar el archivo de personal, {required_label} y la carpeta de salida.",
             )
             return
 
-        self.status_left.configure(text="Analizando asistencia...")
+        status_text = "Analizando asistencia diaria..." if mode == "daily" else "Analizando rango de asistencia..."
+        self.status_left.configure(text=status_text)
         self.update_idletasks()
+
         try:
-            result = calculate_attendance(
-                personal_path=Path(personal_path),
-                events_path=Path(events_path),
-                output_dir=Path(output_dir),
-                overwrite=self.overwrite.get(),
-            )
+            if mode == "daily":
+                result: ResultType = calculate_attendance(
+                    personal_path=Path(personal_path),
+                    events_path=Path(data_path),
+                    output_dir=Path(output_dir),
+                    overwrite=self.overwrite.get(),
+                )
+            else:
+                result = calculate_attendance_range(
+                    personal_path=Path(personal_path),
+                    range_events_path=Path(data_path),
+                    output_dir=Path(output_dir),
+                    overwrite=self.overwrite.get(),
+                )
         except Exception as exc:
             self.status_left.configure(text="Ocurrió un error durante el análisis.")
-            messagebox.showerror("Análisis fallido", str(exc))
+            messagebox.showerror("Analisis fallido", str(exc))
             return
 
         self.result = result
         self.report_file = result.report_file
         self.overtime_report_file = result.overtime_report_file
         self.log_file = result.log_file
-        self._update_result_view(result)
+        self._update_result_view(result, mode)
         self.open_output_button.state(["!disabled"])
-        self.status_left.configure(text="Análisis completado.")
-        overtime_text = (
-            f" | Horas extra: {result.overtime_report_file.name}"
-            if result.overtime_report_file
-            else ""
-        )
-        self.status_right.configure(text=f"Reporte: {result.report_file.name}{overtime_text} | Log: {result.log_file.name}")
-        self._show_report_saved_message(result)
+        self.status_right.configure(text=self._build_output_status(result))
 
-    def _update_result_view(self, result: RunResult):
+        errors, cautions, notes = self._classify_issues(result.issues)
+        if errors:
+            self.status_left.configure(text="Analisis con errores.")
+            self._show_issue_message("error", result, errors, [])
+            return
+
+        if cautions or notes:
+            self.status_left.configure(text="Analisis completado con observaciones.")
+            self._show_issue_message("notice", result, cautions, notes)
+            return
+
+        self.status_left.configure(text="Analisis completado.")
+        self._show_issue_message("info", result, [], [])
+
+    def _update_result_view(self, result: ResultType, mode: str):
+        if mode == "daily":
+            self._update_daily_result_view(result)
+        else:
+            self._update_range_result_view(result)
+
+    def _update_daily_result_view(self, result: ResultType):
+        assert isinstance(result, RunResult)
+        self._set_daily_result_tabs()
         self.hero_title.configure(
             text=(
                 f"Fecha {result.work_date_label} | Asistencias: {result.attendance_count} | "
@@ -436,11 +534,14 @@ class LinherAttendanceApp(tk.Tk):
             hero_lines.append(f"Observaciones globales detectadas: {len(result.issues)}")
         self.hero_text.configure(text=" | ".join(hero_lines))
 
-        self.metric_cards["empleados"].configure(text=str(result.total_employees))
-        self.metric_cards["asistencias"].configure(text=str(result.attendance_count))
-        self.metric_cards["retardos"].configure(text=str(result.tardy_count))
-        self.metric_cards["faltas"].configure(text=str(result.absence_count))
-        self.metric_cards["incidencias"].configure(text=str(result.incident_employee_count))
+        self._set_metric_captions("Plantilla valida", "Presentes", "Retardos", "Faltas", "Alertas")
+        self._set_metric_values(
+            str(result.total_employees),
+            str(result.attendance_count),
+            str(result.tardy_count),
+            str(result.absence_count),
+            str(result.incident_employee_count),
+        )
 
         self._fill_tree(self.trees["resumen"], result.summary_frame)
         self._fill_tree(self.trees["vista"], result.quick_view_frame)
@@ -448,41 +549,136 @@ class LinherAttendanceApp(tk.Tk):
         self._fill_tree(self.trees["retardos"], result.tardy_frame)
         self._fill_tree(self.trees["incidencias"], result.incident_frame)
         self._fill_tree(self.trees["detalle"], result.daily_frame)
-        self.notebook.select(self.notebook.tabs()[0])
+        self.notebook.select(1)
 
-    def _show_report_saved_message(self, result: RunResult):
+    def _update_range_result_view(self, result: ResultType):
+        assert isinstance(result, RangeRunResult)
+        self._set_range_result_tabs()
+        self.hero_title.configure(
+            text=(
+                f"Periodo {result.range_label} | Dias laborales: {result.workday_count} | "
+                f"Retardos: {result.tardy_count} | Faltas: {result.absence_count}"
+            )
+        )
+        hero_lines = [
+                f"Días con operación: {result.operational_day_count}",
+                f"Días sin registros globales: {result.non_operational_day_count}",
+            "Corte parcial detectado" if result.partial_cutoff else "Corte parcial no detectado",
+            (
+                f"Horas extra: {result.total_overtime_hours} hora(s) en reporte separado"
+                if result.overtime_report_file
+                else "Horas extra: sin reporte separado para este rango"
+            ),
+        ]
+        if result.issues:
+            hero_lines.append(f"Observaciones globales detectadas: {len(result.issues)}")
+        self.hero_text.configure(text=" | ".join(hero_lines))
+
+        self._set_metric_captions("Plantilla valida", "Dias laborales", "Retardos", "Faltas", "Alertas")
+        self._set_metric_values(
+            str(result.total_employees),
+            str(result.workday_count),
+            str(result.tardy_count),
+            str(result.absence_count),
+            str(result.incident_employee_count),
+        )
+
+        self._fill_tree(self.trees["resumen"], result.summary_frame)
+        self._fill_tree(self.trees["vista"], result.historical_preview_frame)
+        self._fill_tree(self.trees["faltas"], result.alerts_frame)
+        self._fill_tree(self.trees["retardos"], result.overtime_summary_frame)
+        self._fill_tree(self.trees["incidencias"], result.overtime_detail_frame)
+        self._fill_tree(self.trees["detalle"], result.detail_frame)
+        self.notebook.select(0)
+
+    def _set_metric_values(self, empleados: str, asistencias: str, retardos: str, faltas: str, incidencias: str):
+        self.metric_cards["empleados"]["value"].configure(text=empleados)
+        self.metric_cards["asistencias"]["value"].configure(text=asistencias)
+        self.metric_cards["retardos"]["value"].configure(text=retardos)
+        self.metric_cards["faltas"]["value"].configure(text=faltas)
+        self.metric_cards["incidencias"]["value"].configure(text=incidencias)
+
+    def _set_metric_captions(self, empleados: str, asistencias: str, retardos: str, faltas: str, incidencias: str):
+        self.metric_cards["empleados"]["caption"].configure(text=empleados)
+        self.metric_cards["asistencias"]["caption"].configure(text=asistencias)
+        self.metric_cards["retardos"]["caption"].configure(text=retardos)
+        self.metric_cards["faltas"]["caption"].configure(text=faltas)
+        self.metric_cards["incidencias"]["caption"].configure(text=incidencias)
+
+    def _build_output_status(self, result: ResultType) -> str:
+        overtime_text = f" | Horas extra: {result.overtime_report_file.name}" if result.overtime_report_file else ""
+        return f"Reporte: {result.report_file.name}{overtime_text}"
+
+    def _classify_issues(self, issues: list[RunIssue]) -> tuple[list[str], list[str], list[str]]:
+        errors: list[str] = []
+        cautions: list[str] = []
+        notes: list[str] = []
+        caution_markers = (
+            "corte parcial",
+            "usuarios que no existen en la bbdd",
+            "ids duplicados en personal",
+            "eventos con tiempo invalido",
+        )
+        for issue in issues:
+            text = issue.message
+            normalized = text.lower()
+            if issue.level.lower() == "error":
+                errors.append(text)
+            elif any(marker in normalized for marker in caution_markers):
+                cautions.append(text)
+            else:
+                notes.append(text)
+        return errors, cautions, notes
+
+    def _show_issue_message(
+        self,
+        level: str,
+        result: ResultType,
+        issue_messages: list[str],
+        note_messages: list[str],
+    ):
         lines = [
-            "El reporte se generó correctamente.",
+            "Carpeta de salida:",
+            str(result.report_file.parent),
             "",
-            f"Carpeta de salida: {result.report_file.parent}",
             f"Reporte principal: {result.report_file.name}",
         ]
         if result.overtime_report_file:
             lines.append(f"Reporte de horas extra: {result.overtime_report_file.name}")
-        lines.append(f"Log: {result.log_file.name}")
-        renamed_outputs = [
-            issue.message for issue in result.issues if "Se guardó como" in issue.message or "se guardó como" in issue.message
-        ]
-        if renamed_outputs:
-            lines.extend(["", "Notas de guardado:"])
-            lines.extend(f"- {message}" for message in renamed_outputs)
-        messagebox.showinfo("Reporte generado", "\n".join(lines))
 
-    def _fill_tree(self, tree: ttk.Treeview, frame: pd.DataFrame):
+        if issue_messages:
+            section_title = "Detalle del error:" if level == "error" else "Observaciones importantes:"
+            lines.extend(["", section_title])
+            lines.extend(f"- {message}" for message in issue_messages)
+        if note_messages:
+            lines.extend(["", "Notas informativas:"])
+            lines.extend(f"- {message}" for message in note_messages)
+
+        message = "\n".join(lines)
+        if level == "error":
+            messagebox.showerror("Analisis con errores", message)
+        elif level == "notice":
+            messagebox.showinfo("Reporte generado con observaciones", message)
+        else:
+            messagebox.showinfo("Reporte generado", message)
+
+    def _fill_tree(self, tree: ttk.Treeview, frame):
         tree.delete(*tree.get_children())
         columns = list(frame.columns)
         tree.configure(columns=columns)
         for column in columns:
             tree.heading(column, text=column)
-            width = max(110, min(280, len(column) * 11))
-            if column == "Campo":
-                width = 140
+            width = max(110, min(300, len(column) * 11))
+            if column in {"Campo", "Fecha", "Dia", "Horario"}:
+                width = 130
             if column.startswith("Empleado"):
                 width = 220
             if column == "Nombre":
-                width = 220
+                width = 240
             if column == "Detalle":
-                width = 320
+                width = 340
+            if column in {"Entrada", "Inicio comida", "Fin comida", "Salida", "Horas trabajadas"}:
+                width = 125
             tree.column(column, width=width, anchor="w")
 
         if frame.empty:
