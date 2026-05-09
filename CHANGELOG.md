@@ -6,6 +6,33 @@ This project follows **Semantic Versioning** (`MAJOR.MINOR.PATCH`).
 
 ---
 
+## [v1.3.0] - Installer & Launcher Experience
+
+### Added
+- Windows installer flow with `Inno Setup` for first-time installation
+- `onedir` distribution for both `attendance_launcher` and `attendance_windows`
+- Portable launcher package that includes the current app bundle for local installation fallback
+- Optional branded image support in the launcher loading window
+
+### Implemented
+- Single loading window in the launcher with visible progress and status messages
+- Runtime installation of the bundled app package before checking GitHub Releases
+- Main app update flow based on `attendance_windows.zip`
+- Weekly historical Excel view aligned to a single horizontal run of employees with vertical daily history
+- Daily and range tabs now use aligned reporting categories for easier supervisor review
+- Orthography and accent cleanup across the GUI and Excel export labels
+
+### Business Rules
+- The range historical sheet shows `NOMBRE` only once and keeps all valid employees in ascending `ID` order
+- Weekly review keeps `FECHA` and `CAMPO` fixed at the left for easier vertical inspection
+- Missing or non-operational labor days remain non-punitive and are not treated as mass absences
+
+### Notes
+- This release professionalizes installation and startup UX without changing the existing attendance rules
+- The launcher remains the recommended entry point for end users
+
+---
+
 ## [v1.2.0] - Range Reporting & Historical View
 
 ### Added
@@ -23,7 +50,7 @@ This project follows **Semantic Versioning** (`MAJOR.MINOR.PATCH`).
 
 ### Business Rules
 - All valid workers appear in the range report, even if they have no punches on a given labor day
-- Labor days without global records are treated as `Sin operacion`, not as mass absences
+- Labor days without global records are treated as `Sin operación`, not as mass absences
 - Historical overtime is reported both as employee summary and per-day detail
 - Three-punch inference now prioritizes plausible slot windows to avoid misclassifying very late entries as lunch punches
 
