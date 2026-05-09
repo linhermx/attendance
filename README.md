@@ -8,45 +8,46 @@ Herramienta interna para analizar el **control de asistencia** a partir de los a
 
 El sistema cruza la BBDD de personal con los eventos del checador y responde de forma clara:
 
-- quien asistio y quien falto
-- quien llego tarde
-- quien omitio checadas importantes
-- quien salio antes del horario programado
-- quien genero horas extra pagables
-- como se comporta el personal en un dia o en un rango de fechas
+- quién asistió y quién faltó
+- quién llegó tarde
+- quién omitió checadas importantes
+- quién salió antes del horario programado
+- quién generó horas extra pagables
+- cómo se comporta el personal en un día o en un rango de fechas
 
 Incluye:
 
-- aplicacion **Windows (.exe)** para usuarios no tecnicos
-- interfaz grafica (GUI)
-- actualizacion automatica mediante launcher
-- uso por linea de comandos (CLI) para usuarios tecnicos
-- generacion de reportes en Excel
+- aplicación **Windows (.exe)** para usuarios no técnicos
+- interfaz gráfica (GUI)
+- actualización automática mediante launcher
+- uso por línea de comandos (CLI) para usuarios técnicos
+- generación de reportes en Excel
 
 ---
 
-## Caracteristicas
+## Características
 
 - lectura directa de archivos `.xls` exportados por el checador
-- analisis en dos modos:
+- análisis en dos modos:
   - `Diario`
   - `Rango`
-- calculo de asistencias, retardos, faltas e incidencias
-- deteccion de omisiones de checada:
+- cálculo de asistencias, retardos, faltas e incidencias
+- detección de omisiones de checada:
   - entrada
   - salida a comida
   - regreso de comida
   - salida final
-- calculo de horas trabajadas
-- calculo de **horas extra pagables** solo por horas completas despues de cumplir la jornada
-- vista rapida en Excel para compartir con jefatura
-- vista historica por rango con empleados en horizontal e historial en vertical
-- exclusion automatica de registros invalidos en la BBDD
-- depuracion de checadas duplicadas conservando la mas temprana
+- cálculo de horas trabajadas
+- cálculo de **horas extra pagables** solo por horas completas después de cumplir la jornada
+- vista rápida en Excel para compartir con jefatura
+- vista histórica por rango con empleados en horizontal e historial en vertical
+- exclusión automática de registros inválidos en la BBDD
+- depuración de checadas duplicadas conservando la más temprana
 - inferencia inteligente cuando falta solo una checada y existen `3` registros coherentes
-- deteccion de archivos invertidos entre personal y eventos
-- exportacion de resultados a **Excel**
-- launcher con actualizacion automatica por **GitHub Releases**
+- detección de archivos invertidos entre personal y eventos
+- exportación de resultados a **Excel**
+- launcher con actualización automática por **GitHub Releases**
+- instalador con `Inno Setup` para primer uso en Windows
 
 ---
 
@@ -57,7 +58,7 @@ Incluye:
 1. Ir a **Releases**:
    https://github.com/linhermx/attendance/releases
 2. Descargar:
-   **`attendance_launcher.exe`**
+   **`attendance_setup.exe`**
 
 > No necesitas instalar Python ni dependencias.
 
@@ -65,21 +66,23 @@ Incluye:
 
 ### Primer uso
 
-1. Ejecuta `attendance_launcher.exe`
-2. El launcher:
-   - revisa si hay una version mas reciente
+1. Ejecuta `attendance_setup.exe`
+2. Completa la instalación
+3. Abre `Attendance` desde el acceso directo creado por el instalador
+4. El launcher:
+   - revisa si hay una versión más reciente
    - pregunta si deseas actualizar
    - guarda sus archivos internos en `%LOCALAPPDATA%\LINHER\Attendance`
-3. Acepta y el sistema se actualiza automaticamente
+5. Acepta y el sistema se actualiza automáticamente
 
-Despues se abre la aplicacion principal.
-Siempre debes abrir `attendance_launcher.exe`; los archivos internos se administran automaticamente.
+Después se abre la aplicación principal.
+Siempre debes abrir `Attendance` desde su acceso directo o desde `attendance_launcher.exe`; los archivos internos se administran automáticamente.
 
 ---
 
 ### Uso de la aplicacion
 
-La aplicacion tiene dos modos principales:
+La aplicación tiene dos modos principales:
 
 - `Diario`
 - `Rango`
@@ -87,7 +90,7 @@ La aplicacion tiene dos modos principales:
 #### Modo Diario
 
 1. Selecciona el archivo **Personal**
-2. Selecciona el archivo **Eventos del dia**
+2. Selecciona el archivo **Eventos del día**
 3. Selecciona la **carpeta de salida**
 4. Haz clic en **Analizar asistencia diaria**
 
@@ -112,7 +115,7 @@ Salidas generadas:
 
 ## Formato de archivos de entrada
 
-La aplicacion trabaja directamente con los archivos exportados por el sistema de checador.
+La aplicación trabaja directamente con los archivos exportados por el sistema de checador.
 
 ### Archivo de personal
 
@@ -336,7 +339,7 @@ python .\attendance_cli.py `
 Incluye estas hojas:
 
 - `Resumen`
-- `Vista rapida`
+- `Vista rápida`
 - `Faltas`
 - `Retardos`
 - `Incidencias`
@@ -356,8 +359,10 @@ Incluye:
 Incluye estas hojas:
 
 - `Resumen`
-- `Vista historica`
-- `Alertas del periodo`
+- `Vista histórica`
+- `Faltas`
+- `Retardos`
+- `Incidencias`
 - `Detalle consolidado`
 
 ### `reporte_horas_extra_rango.xlsx`
@@ -374,11 +379,11 @@ Incluye:
 ## Flujo recomendado
 
 1. Exportar la BBDD de personal vigente
-2. Elegir si el analisis sera `Diario` o `Rango`
+2. Elegir si el análisis será `Diario` o `Rango`
 3. Exportar el archivo correspondiente desde el checador
-4. Ejecutar la aplicacion
+4. Ejecutar la aplicación
 5. Revisar el resumen principal
-6. Compartir la `Vista rapida` o la `Vista historica`
+6. Compartir la `Vista rápida` o la `Vista histórica`
 7. Revisar faltas, retardos e incidencias
 8. Consultar el reporte de horas extra si aplica
 
@@ -389,11 +394,15 @@ Incluye:
 ```powershell
 .\scripts\build_windows.ps1
 .\scripts\build_launcher.ps1
+.\scripts\build_installer.ps1
 ```
 
-Los binarios se generan en `dist/`:
+Los binarios y paquetes se generan en `dist/`:
 
-- `attendance_windows.exe`
-- `attendance_launcher.exe`
+- `attendance_windows\`
+- `attendance_windows.zip`
+- `attendance_launcher\`
+- `attendance_launcher_portable.zip`
+- `installer\attendance_setup.exe`
 
-Ambos scripts crean `.\venv` automaticamente si todavia no existe.
+Los scripts crean `.\venv` automáticamente si todavía no existe.
