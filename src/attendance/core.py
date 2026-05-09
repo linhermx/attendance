@@ -109,7 +109,9 @@ class RangeRunResult:
     total_overtime_hours: int
     summary_frame: pd.DataFrame
     historical_preview_frame: pd.DataFrame
-    alerts_frame: pd.DataFrame
+    absence_frame: pd.DataFrame
+    tardy_frame: pd.DataFrame
+    incident_frame: pd.DataFrame
     detail_frame: pd.DataFrame
     overtime_summary_frame: pd.DataFrame
     overtime_detail_frame: pd.DataFrame
@@ -1439,7 +1441,7 @@ def calculate_attendance(
 def build_range_summary_frame(result: RangeRunResult) -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Indicador": "Periodo analizado", "Valor": result.range_label},
+            {"Indicador": "Período analizado", "Valor": result.range_label},
             {"Indicador": "Total de empleados", "Valor": result.total_employees},
             {"Indicador": "Días laborales en rango", "Valor": result.workday_count},
             {"Indicador": "Días con operación", "Valor": result.operational_day_count},
@@ -1467,6 +1469,26 @@ def build_range_alerts_frame(detail_frame: pd.DataFrame) -> pd.DataFrame:
         | (detail_frame["Horas extra"].fillna(0) > 0)
     )
     frame = detail_frame.loc[alert_mask, ["Fecha", "ID", "Nombre", "Estatus", "Detalle", "Horas extra"]].copy()
+    return sort_by_date_and_id(frame)
+
+
+def build_range_absence_frame(detail_frame: pd.DataFrame) -> pd.DataFrame:
+    frame = detail_frame[detail_frame["Estatus"] == "Falta"][["Fecha", "ID", "Nombre", "Detalle"]].copy()
+    return sort_by_date_and_id(frame)
+
+
+def build_range_tardy_frame(detail_frame: pd.DataFrame) -> pd.DataFrame:
+    frame = detail_frame[detail_frame["Retardo min"].fillna(0) > 0][
+        ["Fecha", "ID", "Nombre", "Entrada", "Retardo min", "Detalle"]
+    ].copy()
+    return sort_by_date_and_id(frame)
+
+
+def build_range_incident_frame(detail_frame: pd.DataFrame) -> pd.DataFrame:
+    frame = detail_frame[
+        (detail_frame["Detalle"] != "")
+        & ~detail_frame["Estatus"].isin({"Falta", "Sin operación", "Pendiente"})
+    ][["Fecha", "ID", "Nombre", "Entrada", "Inicio comida", "Fin comida", "Salida", "Estatus", "Detalle"]].copy()
     return sort_by_date_and_id(frame)
 
 
@@ -1533,7 +1555,7 @@ def write_range_summary_sheet(writer: pd.ExcelWriter, result: RangeRunResult) ->
     wrap_format = workbook.add_format({"border": 1, "valign": "top", "text_wrap": True})
 
     worksheet.write(0, 0, "Reporte por rango de asistencia", title_format)
-    worksheet.write(1, 0, f"Periodo: {result.range_label}", subtitle_format)
+    worksheet.write(1, 0, f"Período: {result.range_label}", subtitle_format)
     worksheet.write(2, 0, "Se excluyen domingos y los días sin registros globales no se cuentan como falta.", subtitle_format)
 
     for row_index, row in enumerate(result.summary_frame.itertuples(index=False), start=4):
@@ -1544,8 +1566,8 @@ def write_range_summary_sheet(writer: pd.ExcelWriter, result: RangeRunResult) ->
     next_row = write_frame_block(
         worksheet,
         next_row,
-        "Alertas del periodo",
-        result.alerts_frame,
+        "Incidencias del periodo",
+        result.incident_frame[["Fecha", "ID", "Nombre", "Estatus", "Detalle"]] if not result.incident_frame.empty else result.incident_frame,
         section_format,
         header_format,
         cell_format,
@@ -1584,17 +1606,22 @@ def write_range_historical_sheet(writer: pd.ExcelWriter, result: RangeRunResult)
     status_pending = workbook.add_format({"border": 1, "bg_color": "#DBEAFE", "font_color": "#1D4ED8", "bold": True})
 
     detail_frame = result.detail_frame.copy()
-    worksheet.merge_range(0, 0, 0, QUICK_VIEW_BLOCK_SIZE + 1, "Vista histórica por rango", title_format)
-    worksheet.write(1, 0, f"Periodo: {result.range_label}")
-
     unique_dates = sorted(detail_frame["Fecha"].unique().tolist()) if not detail_frame.empty else []
-    employee_meta = sort_by_id(detail_frame[["ID", "Nombre"]].drop_duplicates())
+    employee_meta = (
+        sort_by_id(detail_frame[["ID", "Nombre"]].drop_duplicates())
+        if not detail_frame.empty
+        else pd.DataFrame(columns=["ID", "Nombre"])
+    )
+    last_data_column = max(2, len(employee_meta) + 1)
+
+    worksheet.merge_range(0, 0, 0, last_data_column, "Vista histórica por rango", title_format)
+    worksheet.write(1, 0, f"Período: {result.range_label}")
+
     lookup = {
         (row["Fecha"], str(row["ID"])): row
         for _, row in detail_frame.iterrows()
     }
 
-    block_start_row = 3
     detail_rows = [
         ("ENTRADA", "Entrada"),
         ("INICIO COMIDA", "Inicio comida"),
@@ -1607,81 +1634,66 @@ def write_range_historical_sheet(writer: pd.ExcelWriter, result: RangeRunResult)
     ]
     placeholder_fields = {"Entrada", "Inicio comida", "Fin comida", "Salida", "Horas trabajadas", "Horas extra"}
 
-    for start in range(0, len(employee_meta), QUICK_VIEW_BLOCK_SIZE):
-        chunk = employee_meta.iloc[start : start + QUICK_VIEW_BLOCK_SIZE].reset_index(drop=True)
-        header_row = block_start_row
-        worksheet.write(header_row, 0, "FECHA", block_label)
-        worksheet.write(header_row, 1, "CAMPO", block_label)
-        for offset in range(QUICK_VIEW_BLOCK_SIZE):
-            column = offset + 2
-            if offset < len(chunk):
-                worksheet.write(header_row, column, str(chunk.loc[offset, "ID"]), block_label)
-            else:
-                worksheet.write(header_row, column, "", block_label)
+    header_row = 3
+    worksheet.write(header_row, 0, "FECHA", block_label)
+    worksheet.write(header_row, 1, "CAMPO", block_label)
+    for column, employee in enumerate(employee_meta.itertuples(index=False), start=2):
+        worksheet.write(header_row, column, str(employee.ID), block_label)
 
-        name_row = header_row + 1
-        worksheet.write(name_row, 1, "NOMBRE", name_label)
-        for offset in range(QUICK_VIEW_BLOCK_SIZE):
-            column = offset + 2
-            if offset < len(chunk):
-                worksheet.write(name_row, column, chunk.loc[offset, "Nombre"], value_format)
-            else:
-                worksheet.write(name_row, column, "", value_format)
+    name_row = header_row + 1
+    worksheet.write(name_row, 1, "NOMBRE", name_label)
+    for column, employee in enumerate(employee_meta.itertuples(index=False), start=2):
+        worksheet.write(name_row, column, employee.Nombre, value_format)
 
-        current_row = name_row + 1
-        for day_label in unique_dates:
-            date_start_row = current_row
-            date_end_row = current_row + len(detail_rows) - 1
-            worksheet.merge_range(date_start_row, 0, date_end_row, 0, day_label, date_format)
-            for row_offset, (label, field) in enumerate(detail_rows):
-                row_idx = current_row + row_offset
-                worksheet.write(row_idx, 1, label, block_label)
-                for offset in range(QUICK_VIEW_BLOCK_SIZE):
-                    column = offset + 2
-                    if offset >= len(chunk):
-                        worksheet.write(row_idx, column, "", value_format)
-                        continue
-                    employee_id = str(chunk.loc[offset, "ID"])
-                    row = lookup.get((day_label, employee_id))
-                    value = "" if row is None else row[field]
-                    if pd.isna(value):
-                        value = ""
-                    if field in placeholder_fields and str(value).strip() == "":
-                        value = "--"
-                    if field == "Horas extra" and str(value).strip() not in ("", "--", "0", "0.0"):
-                        value = f"{int(value)} h"
-                    if field == "Estatus":
-                        text = str(value)
-                        if text == "Sin operación":
-                            fmt = status_neutral
-                        elif text == "Pendiente":
-                            fmt = status_pending
-                        elif "Falta" in text:
-                            fmt = status_falta
-                        elif "Retardo" in text:
-                            fmt = status_retardo
-                        elif "Incidencia" in text:
-                            fmt = status_incidencia
-                        else:
-                            fmt = status_puntual
-                        worksheet.write(row_idx, column, value, fmt)
+    current_row = name_row + 1
+    for day_label in unique_dates:
+        date_start_row = current_row
+        date_end_row = current_row + len(detail_rows) - 1
+        worksheet.merge_range(date_start_row, 0, date_end_row, 0, day_label, date_format)
+        for row_offset, (label, field) in enumerate(detail_rows):
+            row_idx = current_row + row_offset
+            worksheet.write(row_idx, 1, label, block_label)
+            for column, employee in enumerate(employee_meta.itertuples(index=False), start=2):
+                employee_id = str(employee.ID)
+                row = lookup.get((day_label, employee_id))
+                value = "" if row is None else row[field]
+                if pd.isna(value):
+                    value = ""
+                if field in placeholder_fields and str(value).strip() == "":
+                    value = "--"
+                if field == "Horas extra" and str(value).strip() not in ("", "--", "0", "0.0"):
+                    value = f"{int(value)} h"
+                if field == "Estatus":
+                    text = str(value)
+                    if text == "Sin operación":
+                        fmt = status_neutral
+                    elif text == "Pendiente":
+                        fmt = status_pending
+                    elif "Falta" in text:
+                        fmt = status_falta
+                    elif "Retardo" in text:
+                        fmt = status_retardo
+                    elif "Incidencia" in text:
+                        fmt = status_incidencia
                     else:
-                        worksheet.write(row_idx, column, value, value_format)
-            current_row = date_end_row + 1
-
-        block_start_row = current_row + 2
+                        fmt = status_puntual
+                    worksheet.write(row_idx, column, value, fmt)
+                else:
+                    worksheet.write(row_idx, column, value, value_format)
+        current_row = date_end_row + 1
 
     worksheet.set_column(0, 0, 14)
     worksheet.set_column(1, 1, 22)
-    worksheet.set_column(2, QUICK_VIEW_BLOCK_SIZE + 1, 28)
+    worksheet.set_column(2, last_data_column, 28)
     worksheet.freeze_panes(5, 2)
-
 
 def write_range_report(path: Path, result: RangeRunResult) -> None:
     with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
         write_range_summary_sheet(writer, result)
         write_range_historical_sheet(writer, result)
-        write_standard_sheet(writer, "Alertas del periodo", result.alerts_frame)
+        write_standard_sheet(writer, "Faltas", result.absence_frame)
+        write_standard_sheet(writer, "Retardos", result.tardy_frame)
+        write_standard_sheet(writer, "Incidencias", result.incident_frame)
         write_standard_sheet(writer, "Detalle consolidado", result.detail_frame)
 
 
@@ -1693,7 +1705,7 @@ def write_range_overtime_report(path: Path, result: RangeRunResult) -> None:
 
 def write_range_log(path: Path, result: RangeRunResult) -> None:
     lines = [
-        f"Periodo analizado: {result.range_label}",
+        f"Período analizado: {result.range_label}",
         f"Total empleados: {result.total_employees}",
         f"Días laborales: {result.workday_count}",
         f"Días con operación: {result.operational_day_count}",
@@ -1754,7 +1766,9 @@ def empty_range_result(report_file: Path, overtime_report_file: Path, issues: li
         total_overtime_hours=0,
         summary_frame=pd.DataFrame(columns=["Indicador", "Valor"]),
         historical_preview_frame=pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Entrada", "Salida", "Horas trabajadas", "Estatus", "Detalle"]),
-        alerts_frame=pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Estatus", "Detalle", "Horas extra"]),
+        absence_frame=pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Detalle"]),
+        tardy_frame=pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Entrada", "Retardo min", "Detalle"]),
+        incident_frame=pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Entrada", "Inicio comida", "Fin comida", "Salida", "Estatus", "Detalle"]),
         detail_frame=pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Entrada", "Salida", "Estatus", "Detalle"]),
         overtime_summary_frame=pd.DataFrame(columns=["ID", "Nombre", "Días con horas extra", "Horas extra totales"]),
         overtime_detail_frame=pd.DataFrame(columns=["Fecha", "ID", "Nombre", "Salida", "Horas extra"]),
@@ -1869,7 +1883,9 @@ def calculate_attendance_range(
     full_range_frame = pd.concat(all_day_frames, ignore_index=True) if all_day_frames else pd.DataFrame()
     detail_frame = build_range_detail_frame(full_range_frame)
     preview_frame = build_range_preview_frame(detail_frame)
-    alerts_frame = build_range_alerts_frame(detail_frame)
+    absence_frame = build_range_absence_frame(detail_frame)
+    tardy_frame = build_range_tardy_frame(detail_frame)
+    incident_frame = build_range_incident_frame(detail_frame)
     overtime_summary_frame = build_range_overtime_summary_frame(detail_frame)
     overtime_detail_frame = build_range_overtime_detail_frame(detail_frame)
 
@@ -1900,7 +1916,9 @@ def calculate_attendance_range(
         total_overtime_hours=total_overtime_hours,
         summary_frame=pd.DataFrame(columns=["Indicador", "Valor"]),
         historical_preview_frame=preview_frame,
-        alerts_frame=alerts_frame,
+        absence_frame=absence_frame,
+        tardy_frame=tardy_frame,
+        incident_frame=incident_frame,
         detail_frame=detail_frame,
         overtime_summary_frame=overtime_summary_frame,
         overtime_detail_frame=overtime_detail_frame,

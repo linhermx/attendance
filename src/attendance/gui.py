@@ -202,7 +202,7 @@ class LinherAttendanceApp(tk.Tk):
             metrics.columnconfigure(column_index, weight=1)
 
         self.metric_cards = {
-            "empleados": self._create_metric_card(metrics, 0, "0", "Plantilla valida"),
+            "empleados": self._create_metric_card(metrics, 0, "0", "Plantilla válida"),
             "asistencias": self._create_metric_card(metrics, 1, "0", "Presentes"),
             "retardos": self._create_metric_card(metrics, 2, "0", "Retardos"),
             "faltas": self._create_metric_card(metrics, 3, "0", "Faltas"),
@@ -354,9 +354,9 @@ class LinherAttendanceApp(tk.Tk):
     def _set_range_result_tabs(self):
         self.notebook.tab(0, text="Resumen")
         self.notebook.tab(1, text="Vista histórica")
-        self.notebook.tab(2, text="Alertas")
-        self.notebook.tab(3, text="Horas extra (resumen)")
-        self.notebook.tab(4, text="Horas extra (detalle)")
+        self.notebook.tab(2, text="Faltas")
+        self.notebook.tab(3, text="Retardos")
+        self.notebook.tab(4, text="Incidencias")
         self.notebook.tab(5, text="Detalle consolidado")
 
     def _get_current_mode(self) -> str:
@@ -427,7 +427,7 @@ class LinherAttendanceApp(tk.Tk):
             text="Aquí verás el corte del modo activo, los totales importantes y las alertas que sí requieren seguimiento."
         )
         self._set_metric_values("0", "0", "0", "0", "0")
-        self._set_metric_captions("Plantilla valida", "Presentes", "Retardos", "Faltas", "Alertas")
+        self._set_metric_captions("Plantilla válida", "Presentes", "Retardos", "Faltas", "Alertas")
         self._set_daily_result_tabs()
         for tree in self.trees.values():
             tree.delete(*tree.get_children())
@@ -481,7 +481,7 @@ class LinherAttendanceApp(tk.Tk):
                 )
         except Exception as exc:
             self.status_left.configure(text="Ocurrió un error durante el análisis.")
-            messagebox.showerror("Analisis fallido", str(exc))
+            messagebox.showerror("Análisis fallido", str(exc))
             return
 
         self.result = result
@@ -494,16 +494,16 @@ class LinherAttendanceApp(tk.Tk):
 
         errors, cautions, notes = self._classify_issues(result.issues)
         if errors:
-            self.status_left.configure(text="Analisis con errores.")
+            self.status_left.configure(text="Análisis con errores.")
             self._show_issue_message("error", result, errors, [])
             return
 
         if cautions or notes:
-            self.status_left.configure(text="Analisis completado con observaciones.")
+            self.status_left.configure(text="Análisis completado con observaciones.")
             self._show_issue_message("notice", result, cautions, notes)
             return
 
-        self.status_left.configure(text="Analisis completado.")
+        self.status_left.configure(text="Análisis completado.")
         self._show_issue_message("info", result, [], [])
 
     def _update_result_view(self, result: ResultType, mode: str):
@@ -534,7 +534,7 @@ class LinherAttendanceApp(tk.Tk):
             hero_lines.append(f"Observaciones globales detectadas: {len(result.issues)}")
         self.hero_text.configure(text=" | ".join(hero_lines))
 
-        self._set_metric_captions("Plantilla valida", "Presentes", "Retardos", "Faltas", "Alertas")
+        self._set_metric_captions("Plantilla válida", "Presentes", "Retardos", "Faltas", "Alertas")
         self._set_metric_values(
             str(result.total_employees),
             str(result.attendance_count),
@@ -556,7 +556,7 @@ class LinherAttendanceApp(tk.Tk):
         self._set_range_result_tabs()
         self.hero_title.configure(
             text=(
-                f"Periodo {result.range_label} | Dias laborales: {result.workday_count} | "
+                f"Período {result.range_label} | Días laborales: {result.workday_count} | "
                 f"Retardos: {result.tardy_count} | Faltas: {result.absence_count}"
             )
         )
@@ -574,7 +574,7 @@ class LinherAttendanceApp(tk.Tk):
             hero_lines.append(f"Observaciones globales detectadas: {len(result.issues)}")
         self.hero_text.configure(text=" | ".join(hero_lines))
 
-        self._set_metric_captions("Plantilla valida", "Dias laborales", "Retardos", "Faltas", "Alertas")
+        self._set_metric_captions("Plantilla válida", "Días laborales", "Retardos", "Faltas", "Alertas")
         self._set_metric_values(
             str(result.total_employees),
             str(result.workday_count),
@@ -585,9 +585,9 @@ class LinherAttendanceApp(tk.Tk):
 
         self._fill_tree(self.trees["resumen"], result.summary_frame)
         self._fill_tree(self.trees["vista"], result.historical_preview_frame)
-        self._fill_tree(self.trees["faltas"], result.alerts_frame)
-        self._fill_tree(self.trees["retardos"], result.overtime_summary_frame)
-        self._fill_tree(self.trees["incidencias"], result.overtime_detail_frame)
+        self._fill_tree(self.trees["faltas"], result.absence_frame)
+        self._fill_tree(self.trees["retardos"], result.tardy_frame)
+        self._fill_tree(self.trees["incidencias"], result.incident_frame)
         self._fill_tree(self.trees["detalle"], result.detail_frame)
         self.notebook.select(0)
 
@@ -656,7 +656,7 @@ class LinherAttendanceApp(tk.Tk):
 
         message = "\n".join(lines)
         if level == "error":
-            messagebox.showerror("Analisis con errores", message)
+            messagebox.showerror("Análisis con errores", message)
         elif level == "notice":
             messagebox.showinfo("Reporte generado con observaciones", message)
         else:
