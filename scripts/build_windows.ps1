@@ -22,35 +22,52 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 
-if (Test-Path ".\build") { Remove-Item ".\build" -Recurse -Force }
-if (Test-Path ".\dist") { Remove-Item ".\dist" -Recurse -Force }
+$distDir = ".\dist"
+$buildDir = ".\build\attendance_windows"
+$appDir = Join-Path $distDir "attendance_windows"
+$zipPath = Join-Path $distDir "attendance_windows.zip"
+$aliasZipPath = Join-Path $distDir "attendance.zip"
+$legacyExePath = Join-Path $distDir "attendance_windows.exe"
+
+if (!(Test-Path $distDir)) {
+  New-Item -ItemType Directory -Path $distDir | Out-Null
+}
+if (Test-Path $buildDir) { Remove-Item $buildDir -Recurse -Force }
+if (Test-Path $appDir) { Remove-Item $appDir -Recurse -Force }
+if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+if (Test-Path $aliasZipPath) { Remove-Item $aliasZipPath -Force }
+if (Test-Path $legacyExePath) { Remove-Item $legacyExePath -Force }
 
 $pyiArgs = @(
   "--noconfirm",
   "--clean",
-  "--onefile",
+  "--onedir",
   "--windowed",
   "--paths", ".\src",
   "--hidden-import", "attendance",
   "--hidden-import", "attendance.gui",
   "--hidden-import", "attendance.core",
-  "--name", "attendance_windows",
-  "attendance_gui.py"
+  "--name", "attendance_windows"
 )
 
 if ($iconArgs.Count -gt 0) {
-  $pyiArgs = $pyiArgs[0..6] + $iconArgs + $pyiArgs[7..($pyiArgs.Count - 1)]
+  $pyiArgs += $iconArgs
 }
 
-pyinstaller @pyiArgs
+$pyiArgs += "attendance_gui.py"
 
-if (!(Test-Path ".\dist\attendance_windows.exe")) {
-  throw "No se genero el ejecutable: dist\attendance_windows.exe"
+python -m PyInstaller @pyiArgs
+
+if (!(Test-Path (Join-Path $appDir "attendance_windows.exe"))) {
+  throw "No se genero el ejecutable: dist\attendance_windows\attendance_windows.exe"
 }
 
-Write-Host "EXE generado en: dist\attendance_windows.exe"
+Compress-Archive -Path $appDir -DestinationPath $zipPath -Force
+
+Write-Host "Paquete onedir generado en: dist\attendance_windows\"
+Write-Host "ZIP de actualizacion generado en: dist\attendance_windows.zip"
 
 if ($Release) {
-  Copy-Item ".\dist\attendance_windows.exe" -Destination ".\dist\attendance.exe" -Force
-  Write-Host "Alias listo: dist\attendance.exe"
+  Copy-Item $zipPath -Destination $aliasZipPath -Force
+  Write-Host "Alias listo: dist\attendance.zip"
 }
