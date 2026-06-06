@@ -9,7 +9,14 @@ from ctypes import wintypes
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from attendance.core import RangeRunResult, RunIssue, RunResult, calculate_attendance, calculate_attendance_range
+from attendance.core import (
+    RangeRunResult,
+    RunIssue,
+    RunResult,
+    build_operational_detail_frame,
+    calculate_attendance,
+    calculate_attendance_range,
+)
 from attendance.version import __version__
 
 
@@ -33,7 +40,6 @@ class LinherAttendanceApp(tk.Tk):
         self.last_dir = Path.home()
         self.result: ResultType | None = None
         self.report_file: Path | None = None
-        self.overtime_report_file: Path | None = None
         self.log_file: Path | None = None
 
         self._apply_style()
@@ -121,7 +127,7 @@ class LinherAttendanceApp(tk.Tk):
             header,
             text=(
                 "Analiza exportaciones del checador en modo diario o por rango para generar cortes claros "
-                "de asistencia, retardos, omisiones de checada, salidas anticipadas y horas extra pagables."
+                "de asistencia, retardos, omisiones de checada, salidas anticipadas y comida excedida."
             ),
             style="Subtitle.TLabel",
             wraplength=1080,
@@ -270,8 +276,8 @@ class LinherAttendanceApp(tk.Tk):
         ttk.Label(
             range_tab,
             text=(
-                "El modo Rango toma la fecha mínima y máxima del archivo, excluye domingos e incluye "
-                "corte parcial o días sin registros globales cuando aplique."
+                "El modo Rango toma la fecha mínima y máxima del archivo. Los domingos no cuentan como "
+                "días laborales; cualquier checada dominical se conserva únicamente para revisión."
             ),
             foreground="#4B6482",
             wraplength=300,
@@ -312,7 +318,7 @@ class LinherAttendanceApp(tk.Tk):
             panel,
             text=(
                 "El reporte resaltará faltas, retardos, omisiones de checada, comida excedida y salida anticipada. "
-                "Las horas extra se generan por separado y solo cuentan después de cumplir la jornada."
+                "La clasificación técnica queda disponible en la hoja de auditoría."
             ),
             foreground="#4B6482",
             wraplength=300,
@@ -420,7 +426,6 @@ class LinherAttendanceApp(tk.Tk):
         self.overwrite.set(False)
         self.result = None
         self.report_file = None
-        self.overtime_report_file = None
         self.log_file = None
         self.hero_title.configure(text="Carga los archivos para iniciar el análisis.")
         self.hero_text.configure(
@@ -486,7 +491,6 @@ class LinherAttendanceApp(tk.Tk):
 
         self.result = result
         self.report_file = result.report_file
-        self.overtime_report_file = result.overtime_report_file
         self.log_file = result.log_file
         self._update_result_view(result, mode)
         self.open_output_button.state(["!disabled"])
@@ -524,11 +528,6 @@ class LinherAttendanceApp(tk.Tk):
         hero_lines = [
             f"Horario aplicado: {result.schedule_label}",
             f"Personal con incidencias: {result.incident_employee_count}",
-            (
-                f"Horas extra: {result.total_overtime_hours} hora(s) en reporte separado"
-                if result.overtime_report_file
-                else "Horas extra: sin reporte separado para este día"
-            ),
         ]
         if result.issues:
             hero_lines.append(f"Observaciones globales detectadas: {len(result.issues)}")
@@ -548,7 +547,7 @@ class LinherAttendanceApp(tk.Tk):
         self._fill_tree(self.trees["faltas"], result.absence_frame)
         self._fill_tree(self.trees["retardos"], result.tardy_frame)
         self._fill_tree(self.trees["incidencias"], result.incident_frame)
-        self._fill_tree(self.trees["detalle"], result.daily_frame)
+        self._fill_tree(self.trees["detalle"], build_operational_detail_frame(result.daily_frame))
         self.notebook.select(1)
 
     def _update_range_result_view(self, result: ResultType):
@@ -562,13 +561,8 @@ class LinherAttendanceApp(tk.Tk):
         )
         hero_lines = [
                 f"Días con operación: {result.operational_day_count}",
-                f"Días sin registros globales: {result.non_operational_day_count}",
+            f"Días sin registros globales: {result.non_operational_day_count}",
             "Corte parcial detectado" if result.partial_cutoff else "Corte parcial no detectado",
-            (
-                f"Horas extra: {result.total_overtime_hours} hora(s) en reporte separado"
-                if result.overtime_report_file
-                else "Horas extra: sin reporte separado para este rango"
-            ),
         ]
         if result.issues:
             hero_lines.append(f"Observaciones globales detectadas: {len(result.issues)}")
@@ -588,7 +582,7 @@ class LinherAttendanceApp(tk.Tk):
         self._fill_tree(self.trees["faltas"], result.absence_frame)
         self._fill_tree(self.trees["retardos"], result.tardy_frame)
         self._fill_tree(self.trees["incidencias"], result.incident_frame)
-        self._fill_tree(self.trees["detalle"], result.detail_frame)
+        self._fill_tree(self.trees["detalle"], build_operational_detail_frame(result.detail_frame))
         self.notebook.select(0)
 
     def _set_metric_values(self, empleados: str, asistencias: str, retardos: str, faltas: str, incidencias: str):
@@ -606,8 +600,7 @@ class LinherAttendanceApp(tk.Tk):
         self.metric_cards["incidencias"]["caption"].configure(text=incidencias)
 
     def _build_output_status(self, result: ResultType) -> str:
-        overtime_text = f" | Horas extra: {result.overtime_report_file.name}" if result.overtime_report_file else ""
-        return f"Reporte: {result.report_file.name}{overtime_text}"
+        return f"Reporte: {result.report_file.name}"
 
     def _classify_issues(self, issues: list[RunIssue]) -> tuple[list[str], list[str], list[str]]:
         errors: list[str] = []
@@ -643,9 +636,6 @@ class LinherAttendanceApp(tk.Tk):
             "",
             f"Reporte principal: {result.report_file.name}",
         ]
-        if result.overtime_report_file:
-            lines.append(f"Reporte de horas extra: {result.overtime_report_file.name}")
-
         if issue_messages:
             section_title = "Detalle del error:" if level == "error" else "Observaciones importantes:"
             lines.extend(["", section_title])
