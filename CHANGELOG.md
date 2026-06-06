@@ -2,130 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
-This project follows **Semantic Versioning** (`MAJOR.MINOR.PATCH`).
+## [Unreleased]
 
----
+## [v2.0.0] - 2026-06-06
 
-## [v1.3.0] - Installer & Launcher Experience
+### Changed
 
-### Added
-- Windows installer flow with `Inno Setup` for first-time installation
-- `onedir` distribution for both `attendance_launcher` and `attendance_windows`
-- Portable launcher package that includes the current app bundle for local installation fallback
-- Optional branded image support in the launcher loading window
-
-### Implemented
-- Single loading window in the launcher with visible progress and status messages
-- Runtime installation of the bundled app package before checking GitHub Releases
-- Main app update flow based on `attendance_windows.zip`
-- Weekly historical Excel view aligned to a single horizontal run of employees with vertical daily history
-- Daily and range tabs now use aligned reporting categories for easier supervisor review
-- Orthography and accent cleanup across the GUI and Excel export labels
-
-### Business Rules
-- The range historical sheet shows `NOMBRE` only once and keeps all valid employees in ascending `ID` order
-- Weekly review keeps `FECHA` and `CAMPO` fixed at the left for easier vertical inspection
-- Missing or non-operational labor days remain non-punitive and are not treated as mass absences
-
-### Notes
-- This release professionalizes installation and startup UX without changing the existing attendance rules
-- The launcher remains the recommended entry point for end users
-
----
-
-## [v1.2.0] - Range Reporting & Historical View
+- Entry and exit remain rigid events evaluated against the configured schedule.
+- Lunch punches are classified as flexible chronological pairs using duration and sequence coherence.
+- Lunch duration is evaluated with real seconds and a dynamic allowed return based on the work schedule.
+- Operational report detail is separated from technical classification audit.
+- Missing lunch punches in partial cutoffs no longer depend on theoretical lunch times.
+- Worked hours require a complete sequence of real punches.
+- Saturday lunch has a 30-minute maximum; weekday lunch retains a 45-minute maximum.
+- Sunday is treated as a non-working day; all Sunday punches are retained only for review without attendance incidents, deduplication, or schedule evaluation.
+- Quick-view personnel is validated against the loaded personnel source.
+- A first punch before the lunch reference is prioritized as contextual late entry when a plausible final exit exists.
+- Isolated lunch-time punches, late entries with later exits, severe tardies, incomplete records, and ambiguous sequences are covered by the contextual classification rules.
 
 ### Added
-- Attendance analysis in `Rango` mode using the same personnel database and a multi-day export from ZKAccess
-- Historical Excel view with employees in horizontal layout and daily history in vertical blocks
-- Period-level summaries for alerts, overtime, and consolidated attendance detail
 
-### Implemented
-- GUI separation between `Diario` and `Rango` workflows
-- Date-range expansion from the minimum to maximum date in the export, limited to labor days (`Monday` to `Saturday`)
-- Detection of partial cutoff on the last day of the range
-- Freeze panes in the historical weekly view to keep worker identity visible during vertical review
-- Clear validation messages when the user loads `Personal` and `Eventos` files in the wrong fields
-- Removal of `run_log.txt` export in both daily and range modes
+- Business evaluation layer for operational incidents, status, and visible detail.
+- Explainable classification audit with score, reference, assigned event, confidence, and reason.
 
-### Business Rules
-- All valid workers appear in the range report, even if they have no punches on a given labor day
-- Labor days without global records are treated as `Sin operación`, not as mass absences
-- Historical overtime is reported both as employee summary and per-day detail
-- Three-punch inference now prioritizes plausible slot windows to avoid misclassifying very late entries as lunch punches
+### Removed
 
-### Notes
-- This release extends the system from single-day control to weekly historical review without changing the daily workflow
-- The visual style and status colors remain aligned with the existing daily attendance report
+- Overtime calculation and overtime report generation.
 
----
+## [v1.3.0]
 
-## [v1.1.0] - Smart Punch Inference
+- Added Windows installer and launcher workflows.
+- Added historical range view and aligned daily/range report categories.
 
-### Added
-- Intelligent inference for one missing punch when exactly `3` punches exist in a coherent daily pattern
-- Visual marker `~` for inferred entry times in the report and quick view
+## [v1.2.0]
 
-### Implemented
-- Three-punch pattern matching against expected schedule slots (`entry`, `lunch out`, `lunch return`, `exit`)
-- Protection against misleading worked-hours totals on incomplete punch sequences
-- Lunch-overrun details now show only the minutes above the allowed maximum
+- Added range analysis, partial-cutoff detection, and consolidated historical reporting.
 
-### Business Rules
-- When exactly one punch is missing and the remaining three match the expected sequence, the system infers the missing checkpoint
-- Inferred entries can be used to estimate worked hours
-- Inferred entries do not generate a tardiness penalty
+## [v1.1.0]
 
-### Notes
-- This release improves robustness for real-world missed punches without changing standard schedules
-- Fully compatible with the reporting and Windows distribution flow introduced in `v1.0.0`
+- Added initial smart punch inference and incomplete-sequence protections.
 
----
+## [v1.0.0]
 
-## [v1.0.0] - First Official Release
-
-### Added
-- Windows desktop application for daily attendance review
-- Command-line interface for technical usage
-- Windows launcher with update flow through GitHub Releases
-- Direct reading of `Personal_*.xls` and `Eventos de hoy_*.xls`
-- Excel export with:
-  - `Resumen`
-  - `Vista rápida`
-  - `Faltas`
-  - `Retardos`
-  - `Incidencias`
-  - `Detalle diario`
-- Separate overtime report generation when payable overtime exists
-- Execution log with summary and global observations
-- Worked-hours calculation in the main attendance report and quick view
-
-### Implemented
-- Daily attendance detection
-- Tardy detection from `08:01`
-- Absence detection when no punch exists in the day
-- Missing punch detection for:
-  - lunch out
-  - lunch return
-  - final exit
-- Early-exit detection
-- Duplicate punch cleanup keeping the earliest valid record
-- Automatic exclusion of invalid personnel records without usable names
-- Quick-view layout designed for sharing with supervisors
-- Five-minute grace period for workday completion without removing tardy status
-
-### Business Rules
-- Monday to Friday schedule: `08:00` to `17:00`
-- Saturday schedule: `08:00` to `14:00`
-- Lunch rule:
-  - Monday to Friday: `30` to `45` minutes
-  - Saturday: `30` minutes
-- Payable overtime only counts after completing the full workday
-- A five-minute grace period applies to workday completion for payable overtime calculation
-- Overtime is counted only in full hours
-
-### Notes
-- This release establishes the first formal baseline for the attendance control system
-- The project follows the same Windows distribution pattern used in other LINHER internal tools
-
----
+- Added the first daily attendance report, GUI, CLI, launcher, and Excel export.

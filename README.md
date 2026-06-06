@@ -4,405 +4,177 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 
-Herramienta interna para analizar el **control de asistencia** a partir de los archivos exportados por el sistema de checador, desarrollada en Python.
+Herramienta para analizar control de asistencia a partir de archivos exportados por el checador.
 
-El sistema cruza la BBDD de personal con los eventos del checador y responde de forma clara:
+## Funcionalidad
 
-- quién asistió y quién faltó
-- quién llegó tarde
-- quién omitió checadas importantes
-- quién salió antes del horario programado
-- quién generó horas extra pagables
-- cómo se comporta el personal en un día o en un rango de fechas
+- análisis diario y por rango;
+- clasificación contextual de entrada, inicio de comida, regreso de comida y salida;
+- detección de retardos, faltas, omisiones, registros ambiguos y salidas anticipadas;
+- cálculo de horas trabajadas únicamente con cuatro checadas reales, completas y ordenadas;
+- reportes Excel con detalle operativo y una hoja separada de auditoría técnica;
+- configuración de clasificación general, por turno y por empleado;
+- domingos tratados como días no laborables, con checadas conservadas únicamente para revisión;
+- GUI de Windows y CLI.
 
-Incluye:
+## Reglas de clasificación
 
-- aplicación **Windows (.exe)** para usuarios no técnicos
-- interfaz gráfica (GUI)
-- actualización automática mediante launcher
-- uso por línea de comandos (CLI) para usuarios técnicos
-- generación de reportes en Excel
+- Entrada y salida son eventos rígidos y se evalúan contra el horario del turno.
+- Inicio y regreso de comida son eventos flexibles.
+- La hora programada de comida se usa solamente como referencia débil para clasificación.
+- Una pareja cronológica coherente puede clasificarse como comida aunque ocurra después de la referencia.
+- La primera checada del día no se considera entrada automáticamente.
+- La primera checada anterior a la referencia de comida se prioriza como entrada tardía cuando existe una salida final posterior plausible.
+- Las checadas ambiguas no se fuerzan.
+- Nunca se crean ni sustituyen horas faltantes.
 
----
+## Reglas operativas
 
-## Características
+### Entrada y salida
 
-- lectura directa de archivos `.xls` exportados por el checador
-- análisis en dos modos:
-  - `Diario`
-  - `Rango`
-- cálculo de asistencias, retardos, faltas e incidencias
-- detección de omisiones de checada:
-  - entrada
-  - salida a comida
-  - regreso de comida
-  - salida final
-- cálculo de horas trabajadas
-- cálculo de **horas extra pagables** solo por horas completas después de cumplir la jornada
-- vista rápida en Excel para compartir con jefatura
-- vista histórica por rango con empleados en horizontal e historial en vertical
-- exclusión automática de registros inválidos en la BBDD
-- depuración de checadas duplicadas conservando la más temprana
-- inferencia inteligente cuando falta solo una checada y existen `3` registros coherentes
-- detección de archivos invertidos entre personal y eventos
-- exportación de resultados a **Excel**
-- launcher con actualización automática por **GitHub Releases**
-- instalador con `Inno Setup` para primer uso en Windows
+- El retardo se calcula únicamente con una entrada real clasificada.
+- Un retardo de 60 minutos o más se muestra como `Retardo grave`.
+- La salida anticipada se compara contra la salida programada.
 
----
+### Comida
 
-## Uso en Windows (Recomendado)
+- La duración máxima se selecciona automáticamente por jornada: 45 minutos de lunes a viernes y 30 minutos el sábado.
+- El regreso permitido se calcula desde el inicio real de comida.
+- De lunes a viernes, `45:00` es válido y `45:01` genera `Exceso de comida (+1 min)`.
+- El sábado, `30:00` es válido y `30:01` genera `Exceso de comida (+1 min)`.
+- La comparación usa segundos reales.
+- En cortes parciales no se reporta comida faltante solamente porque pasó la hora teórica.
 
-### Descarga
+### Horas trabajadas
 
-1. Ir a **Releases**:
-   https://github.com/linhermx/attendance/releases
-2. Descargar:
-   **`attendance_setup.exe`**
+- Requieren entrada, inicio de comida, regreso de comida y salida reales.
+- Las cuatro checadas deben tener orden cronológico válido.
+- Si falta cualquier evento, el campo queda vacío.
 
-> No necesitas instalar Python ni dependencias.
+### Domingo
 
----
+- El domingo es un día no laborable.
+- No se aplican horarios de entrada, comida o salida.
+- No se generan asistencias, faltas, retardos, incidencias ni horas trabajadas.
+- Si existen checadas, el empleado aparece con estatus `Revisión` y detalle `Checadas en día no laborable`.
+- Las horas registradas se conservan exclusivamente en la auditoría técnica.
+- Las checadas dominicales no se deduplican, para conservar toda la evidencia disponible.
+- Los empleados sin checadas aparecen con estatus neutral `Día no laborable`.
 
-### Primer uso
+## Reportes
 
-1. Ejecuta `attendance_setup.exe`
-2. Completa la instalación
-3. Abre `Attendance` desde el acceso directo creado por el instalador
-4. El launcher:
-   - revisa si hay una versión más reciente
-   - pregunta si deseas actualizar
-   - guarda sus archivos internos en `%LOCALAPPDATA%\LINHER\Attendance`
-5. Acepta y el sistema se actualiza automáticamente
-
-Después se abre la aplicación principal.
-Siempre debes abrir `Attendance` desde su acceso directo o desde `attendance_launcher.exe`; los archivos internos se administran automáticamente.
-
----
-
-### Uso de la aplicacion
-
-La aplicación tiene dos modos principales:
-
-- `Diario`
-- `Rango`
-
-#### Modo Diario
-
-1. Selecciona el archivo **Personal**
-2. Selecciona el archivo **Eventos del día**
-3. Selecciona la **carpeta de salida**
-4. Haz clic en **Analizar asistencia diaria**
-
-Salidas generadas:
+Modo diario:
 
 - `reporte_asistencia.xlsx`
-- `reporte_horas_extra.xlsx` solo si existen horas extra pagables
 
-#### Modo Rango
-
-1. Selecciona el archivo **Personal**
-2. Selecciona el archivo **Rango**
-3. Selecciona la **carpeta de salida**
-4. Haz clic en **Analizar rango**
-
-Salidas generadas:
+Modo rango:
 
 - `reporte_asistencia_rango.xlsx`
-- `reporte_horas_extra_rango.xlsx` solo si existen horas extra pagables
 
----
+Los reportes principales incluyen:
 
-## Formato de archivos de entrada
+- `Resumen`
+- `Vista rápida` o `Vista histórica`
+- `Faltas`
+- `Retardos`
+- `Incidencias`
+- `Detalle diario` o `Detalle consolidado`
+- `Auditoría clasificación`
 
-La aplicación trabaja directamente con los archivos exportados por el sistema de checador.
+`Detalle`, `Detalle diario`, `Detalle consolidado` y las vistas de la GUI contienen únicamente información operativa. Scores, referencias horarias, alternativas, checadas dominicales y razones de asignación se conservan exclusivamente en la hoja `Auditoría clasificación`.
 
-### Archivo de personal
+La Vista rápida se construye únicamente con IDs y nombres presentes en la BBDD de personal cargada. Los archivos y carpetas de salida ubicados en testing, fixtures, mocks, demo, examples, evidence o casos no pueden utilizarse para un reporte operativo.
 
-Patron esperado:
+En reportes por rango, los domingos no incrementan días laborales ni métricas de asistencia. Solamente se incluyen cuando contienen checadas que requieren revisión.
 
-- `Personal_*.xls`
+## Horarios predeterminados
 
-Hoja requerida:
+Lunes a viernes:
 
-- primera hoja disponible o `data`
+- entrada: `08:00`
+- referencia de inicio de comida: `12:00`
+- referencia de regreso: `12:45`
+- salida: `17:00`
 
-Columnas requeridas:
+Sábado:
 
-| Columna | Descripcion |
-|---|---|
-| `ID de usuario` | Identificador del trabajador |
-| `Nombre` | Nombre del trabajador |
-| `Apellido` | Apellido del trabajador |
+- entrada: `08:00`
+- referencia de inicio de comida: `12:00`
+- referencia de regreso: `12:30`
+- salida: `14:00`
+- duración máxima de comida: `30 minutos`
 
-Columnas opcionales que tambien se leen cuando existen:
+Domingo:
 
-- `Numero de tarjeta`
-- `No. de departamento`
-- `Departamento`
+- día no laborable;
+- sin horario normal;
+- checadas únicamente para revisión.
 
-### Archivo de eventos diarios
+## Uso en Windows
 
-Patron esperado:
+1. Descarga `attendance_setup.exe` desde Releases.
+2. Instala y abre `Attendance`.
+3. Selecciona modo diario o rango.
+4. Carga el archivo de personal, el archivo de eventos y la carpeta de salida.
+5. Ejecuta el análisis.
 
-- `Eventos de hoy_*.xls`
+## Uso por CLI
 
-### Archivo de eventos por rango
-
-Patron esperado:
-
-- `Rango*.xls`
-
-### Columnas requeridas para eventos
-
-Hoja requerida:
-
-- primera hoja disponible o `data`
-
-| Columna | Descripcion |
-|---|---|
-| `Tiempo` | Fecha y hora de la checada |
-| `ID de Usuario` | Identificador del trabajador |
-| `Nombre` | Nombre registrado en el checador |
-| `Apellido` | Apellido registrado en el checador |
-| `Estado` | Tipo de evento (`Entrada`, `Salida`, etc.) |
-
-Columnas opcionales que tambien se leen cuando existen:
-
-- `Dispositivo`
-- `Punto del evento`
-- `Verificacion`
-- `Evento`
-- `Notas`
-
----
-
-## Reglas de negocio implementadas
-
-### Horario base
-
-- **Lunes a viernes**
-  - entrada `08:00`
-  - salida a comida `12:00`
-  - regreso de comida `12:45`
-  - salida `17:00`
-  - jornada objetivo `9 horas`
-
-- **Sabado**
-  - entrada `08:00`
-  - salida a comida `12:00`
-  - regreso de comida `12:30`
-  - salida `14:00`
-  - jornada objetivo `6 horas`
-
-### Reglas de asistencia
-
-- retardo a partir de `08:01`
-- falta cuando no existe ninguna checada del trabajador en el dia
-- se excluyen del analisis los registros de personal sin nombre usable
-- si existen checadas duplicadas, se conserva la mas temprana
-- si existe exactamente `1` checada faltante y el patron de `3` checadas encaja con los horarios esperados, el sistema la infiere
-- las entradas inferidas se muestran con `~` en el reporte
-
-### Reglas de comida
-
-- lunes a viernes:
-  - minimo `30 min`
-  - maximo `45 min`
-- sabado:
-  - minimo `30 min`
-  - maximo `30 min`
-- comida menor al minimo no se eleva como incidencia
-- comida mayor al maximo si se reporta como incidencia
-- el exceso de comida se muestra solo como minutos por encima del maximo
-
-### Reglas de salida y horas extra
-
-- salida anticipada cuando la checada final queda antes del horario programado
-- el reporte principal muestra tambien las `horas trabajadas`
-- horas extra solo por **horas completas**
-- primero se exige cumplir la jornada diaria
-- existe una holgura de `5 min` para cumplir jornada, sin eliminar el retardo
-- solo el tiempo posterior a esa jornada cuenta como **hora extra pagable**
-
-Ejemplos:
-
-- si alguien entra tarde y sale mas tarde solo para compensar su jornada, eso no genera horas extra
-- si alguien entra `08:05` y sale `17:00`, conserva el `retardo`, pero si cumple su jornada
-- si alguien cumple su jornada y ademas rebasa ese punto por una hora completa, si se genera `1` hora extra
-
-### Reglas del modo Rango
-
-- el periodo se toma desde la fecha minima hasta la fecha maxima del archivo
-- se incluyen todos los dias laborales de `lunes` a `sabado`
-- los `domingos` se excluyen
-- si el ultimo dia viene incompleto, se marca como `corte parcial`
-- si un dia laboral del rango no tiene registros globales, se marca como `Sin operacion`
-- los dias `Sin operacion` no se contabilizan como falta masiva
-- la `Vista historica` se ordena por `ID` ascendente
-
----
-
-## Uso tecnico / desarrolladores (CLI)
-
-### Requisitos
-
-- Python **3.10+**
-- Windows
-
-Dependencias principales:
-
-- `pandas`
-- `openpyxl`
-- `xlsxwriter`
-- `requests`
-- `xlrd`
-
----
-
-### Instalacion
-
-Se recomienda usar un entorno virtual (`venv`).
+Instalación:
 
 ```powershell
-git clone https://github.com/linhermx/attendance.git
-cd attendance
-
 python -m venv venv
 .\venv\Scripts\Activate.ps1
-
 pip install -r requirements.txt
-pip install -r requirements-dev.txt
 ```
 
----
-
-### Ejecutar GUI en desarrollo
-
-```powershell
-python .\attendance_gui.py
-```
-
-### Ejecutar launcher en desarrollo
-
-```powershell
-python .\attendance_launcher.py
-```
-
-Si no existe una release publicada, el launcher cae localmente a `attendance_gui.py`.
-
----
-
-### Uso basico por CLI
-
-#### Diario
+Reporte diario:
 
 ```powershell
 python .\attendance_cli.py `
   --mode daily `
-  --personal "Personal_2026050411583.xls" `
-  --events "Eventos de hoy_20260504133033.xls" `
+  --personal "Personal.xls" `
+  --events "Eventos.xls" `
+  --classification-config "examples\classification_config.example.json" `
   --outdir "salida" `
   --overwrite
 ```
 
-#### Rango
+Reporte por rango:
 
 ```powershell
 python .\attendance_cli.py `
   --mode range `
-  --personal "Personal_2026050411583.xls" `
+  --personal "Personal.xls" `
   --range-events "Rango.xls" `
   --outdir "salida_rango" `
   --overwrite
 ```
 
----
+## Configuración
 
-## Parametros CLI
+La opción `--classification-config` acepta un JSON con políticas:
 
-| Parametro | Descripcion |
-|---|---|
-| `--mode` | Modo de analisis: `daily` o `range` |
-| `--personal` | Ruta al archivo de personal |
-| `--events` | Ruta al archivo de eventos del dia |
-| `--range-events` | Ruta al archivo de eventos por rango |
-| `--outdir` | Carpeta de salida. Default: `salida` |
-| `--overwrite` | Sobrescribe el reporte si ya existe |
+- `predeterminada`
+- `turnos`
+- `empleados`
 
----
+La precedencia es `empleado > turno > predeterminada`. Consulta
+[`examples/classification_config.example.json`](examples/classification_config.example.json) y
+[`docs/clasificacion_contextual.md`](docs/clasificacion_contextual.md).
 
-## Reportes generados
+## Desarrollo
 
-### `reporte_asistencia.xlsx`
+```powershell
+$env:PYTHONPATH = "src"
+python -m unittest discover -s tests -v
+python .\attendance_gui.py
+```
 
-Incluye estas hojas:
-
-- `Resumen`
-- `Vista rápida`
-- `Faltas`
-- `Retardos`
-- `Incidencias`
-- `Detalle diario`
-
-### `reporte_horas_extra.xlsx`
-
-Solo se genera cuando existen horas extra pagables.
-
-Incluye:
-
-- `Resumen`
-- `Horas extra`
-
-### `reporte_asistencia_rango.xlsx`
-
-Incluye estas hojas:
-
-- `Resumen`
-- `Vista histórica`
-- `Faltas`
-- `Retardos`
-- `Incidencias`
-- `Detalle consolidado`
-
-### `reporte_horas_extra_rango.xlsx`
-
-Solo se genera cuando existen horas extra pagables en el rango.
-
-Incluye:
-
-- `Resumen`
-- `Detalle`
-
----
-
-## Flujo recomendado
-
-1. Exportar la BBDD de personal vigente
-2. Elegir si el análisis será `Diario` o `Rango`
-3. Exportar el archivo correspondiente desde el checador
-4. Ejecutar la aplicación
-5. Revisar el resumen principal
-6. Compartir la `Vista rápida` o la `Vista histórica`
-7. Revisar faltas, retardos e incidencias
-8. Consultar el reporte de horas extra si aplica
-
----
-
-## Build para Windows
+Build para Windows:
 
 ```powershell
 .\scripts\build_windows.ps1
 .\scripts\build_launcher.ps1
 .\scripts\build_installer.ps1
 ```
-
-Los binarios y paquetes se generan en `dist/`:
-
-- `attendance_windows\`
-- `attendance_windows.zip`
-- `attendance_launcher\`
-- `attendance_launcher_portable.zip`
-- `installer\attendance_setup.exe`
-
-Los scripts crean `.\venv` automáticamente si todavía no existe.
