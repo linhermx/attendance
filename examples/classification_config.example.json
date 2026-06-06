@@ -1,0 +1,28 @@
+{
+  "predeterminada": {
+    "score_minimo": 30,
+    "margen_ambiguedad": 8,
+    "comida_aislada_minutos_decisivos": 15,
+    "maximo_par_comida_minutos": 240
+  },
+  "turnos": {
+    "Lunes a viernes": {
+      "salida": {
+        "antes": 120,
+        "despues": 240,
+        "max_antes": 180,
+        "max_despues": 360
+      }
+    }
+  },
+  "empleados": {
+    "14": {
+      "entrada": {
+        "antes": 120,
+        "despues": 180,
+        "max_antes": 180,
+        "max_despues": 240
+      }
+    }
+  }
+}
