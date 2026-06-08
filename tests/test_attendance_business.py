@@ -106,6 +106,84 @@ def write_sources(
 
 
 class FlexibleLunchTests(unittest.TestCase):
+    def test_saturday_lunch_zone_punch_is_lunch_out_not_final_exit(self) -> None:
+        result = clasificar_checadas(["08:03:06", "12:03:24"], SATURDAY_SHIFT)
+        self.assertEqual(result["entrada"], "08:03:06")
+        self.assertEqual(result["inicio_comida"], "12:03:24")
+        self.assertIsNone(result["fin_comida"])
+        self.assertIsNone(result["salida"])
+        self.assertEqual(result["status"], "Retardo + incidencia")
+        self.assertEqual(
+            result["detalle"],
+            "Retardo (3 min) | Sin regreso de comida | Sin salida final",
+        )
+        self.assertNotIn("Salida anticipada", result["detalle"])
+
+    def test_saturday_lunch_zone_with_final_exit_keeps_missing_lunch_return_only(self) -> None:
+        result = clasificar_checadas(
+            ["08:00:00", "12:05:00", "14:00:00"],
+            SATURDAY_SHIFT,
+        )
+        self.assertEqual(result["entrada"], "08:00:00")
+        self.assertEqual(result["inicio_comida"], "12:05:00")
+        self.assertIsNone(result["fin_comida"])
+        self.assertEqual(result["salida"], "14:00:00")
+        self.assertEqual(result["detalle"], "Sin regreso de comida")
+        self.assertNotIn("Salida anticipada", result["detalle"])
+
+    def test_saturday_reference_lunch_sequence_is_punctual(self) -> None:
+        result = clasificar_checadas(
+            ["08:00:00", "12:00:00", "12:30:00", "14:00:00"],
+            SATURDAY_SHIFT,
+        )
+        self.assertEqual(result["status"], "Puntual")
+        self.assertEqual(result["detalle"], "")
+
+    def test_weekday_lunch_zone_punch_is_lunch_out_not_final_exit(self) -> None:
+        result = clasificar_checadas(["08:00:00", "12:05:00"], WEEKDAY_SHIFT)
+        self.assertEqual(result["entrada"], "08:00:00")
+        self.assertEqual(result["inicio_comida"], "12:05:00")
+        self.assertIsNone(result["fin_comida"])
+        self.assertIsNone(result["salida"])
+        self.assertEqual(result["detalle"], "Sin regreso de comida | Sin salida final")
+        self.assertNotIn("Salida anticipada", result["detalle"])
+
+    def test_weekday_lunch_zone_with_final_exit_keeps_missing_lunch_return_only(self) -> None:
+        result = clasificar_checadas(
+            ["08:00:00", "12:05:00", "17:00:00"],
+            WEEKDAY_SHIFT,
+        )
+        self.assertEqual(result["entrada"], "08:00:00")
+        self.assertEqual(result["inicio_comida"], "12:05:00")
+        self.assertIsNone(result["fin_comida"])
+        self.assertEqual(result["salida"], "17:00:00")
+        self.assertEqual(result["detalle"], "Sin regreso de comida")
+
+    def test_weekday_protected_zone_complete_lunch_is_punctual(self) -> None:
+        result = clasificar_checadas(
+            ["08:00:00", "12:05:00", "12:50:00", "17:00:00"],
+            WEEKDAY_SHIFT,
+        )
+        self.assertEqual(result["entrada"], "08:00:00")
+        self.assertEqual(result["inicio_comida"], "12:05:00")
+        self.assertEqual(result["fin_comida"], "12:50:00")
+        self.assertEqual(result["salida"], "17:00:00")
+        self.assertEqual(result["status"], "Puntual")
+        self.assertEqual(result["detalle"], "")
+
+    def test_weekday_protected_zone_lunch_excess_is_not_exit_or_ambiguous(self) -> None:
+        result = clasificar_checadas(
+            ["08:00:00", "12:05:00", "12:55:01", "17:00:00"],
+            WEEKDAY_SHIFT,
+        )
+        self.assertEqual(result["inicio_comida"], "12:05:00")
+        self.assertEqual(result["fin_comida"], "12:55:01")
+        self.assertEqual(result["salida"], "17:00:00")
+        self.assertEqual(result["status"], "Incidencia")
+        self.assertEqual(result["detalle"], "Exceso de comida (+6 min)")
+        self.assertNotIn("Salida anticipada", result["detalle"])
+        self.assertNotIn("Registro ambiguo", result["detalle"])
+
     def test_weekday_flexible_45_minute_pairs_are_valid(self) -> None:
         for lunch_out, lunch_return in (
             ("12:00:00", "12:45:00"),

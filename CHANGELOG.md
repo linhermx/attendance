@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.0.1] - 2026-06-08
+
+### Fixed
+
+- Prevented meal-period punches from being incorrectly classified as early departures in incomplete attendance sequences.
+
 ## [v2.0.0] - 2026-06-06
 
 ### Changed

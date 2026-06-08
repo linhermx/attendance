@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from itertools import product
 import json
 from pathlib import Path
@@ -13,6 +13,8 @@ import unicodedata
 EVENT_KEYS = ("entry", "lunch_out", "lunch_return", "exit")
 RIGID_EVENT_KEYS = ("entry", "exit")
 FLEXIBLE_EVENT_KEYS = ("lunch_out", "lunch_return")
+PROTECTED_LUNCH_BEFORE_MINUTES = 15
+PROTECTED_LUNCH_AFTER_MINUTES = 15
 EVENT_LABELS = {
     "entry": "entrada",
     "lunch_out": "inicio de comida",
@@ -400,6 +402,24 @@ def _flexible_candidate_score(punch: Punch, event: ExpectedEvent) -> CandidateSc
     )
 
 
+def _inside_protected_lunch_zone(
+    punch: Punch,
+    events_by_key: Mapping[str, ExpectedEvent],
+) -> bool:
+    protected_start = events_by_key["lunch_out"].expected_at - timedelta(
+        minutes=PROTECTED_LUNCH_BEFORE_MINUTES
+    )
+    protected_end = events_by_key["lunch_return"].expected_at + timedelta(
+        minutes=PROTECTED_LUNCH_AFTER_MINUTES
+    )
+    return protected_start <= punch.checked_at <= protected_end
+
+
+def _has_strong_exit_hint(punch: Punch) -> bool:
+    hint, strong_hint = _state_hint(punch.state)
+    return strong_hint and hint == "exit"
+
+
 def _contextual_late_entry_punch_id(
     punches: Sequence[Punch],
     expected_events: Sequence[ExpectedEvent],
@@ -460,7 +480,7 @@ def _score_hypothesis(
             score += 80.0
         else:
             excess_minutes = (duration_seconds - reference_lunch_seconds) / 60
-            score += max(20.0, 80.0 - excess_minutes * 2.0)
+            score += max(-120.0, 80.0 - excess_minutes * 2.0)
         if duration_seconds < 5 * 60:
             score -= 90.0
     elif lunch_return_id is not None:
@@ -507,6 +527,12 @@ def _build_hypotheses(
                     else _flexible_candidate_score(punch, event)
                 )
             if candidate is None:
+                continue
+            if (
+                event.key == "exit"
+                and _inside_protected_lunch_zone(punch, events_by_key)
+                and not _has_strong_exit_hint(punch)
+            ):
                 continue
             if event.key in RIGID_EVENT_KEYS and candidate.score < policy.minimum_score:
                 continue
