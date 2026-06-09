@@ -109,6 +109,7 @@ def evaluate_business(
         punch
         for punch in classification.unused_punches
         if punch not in classification.ambiguous_punches
+        and all(punch != duplicate.duplicate for duplicate in classification.duplicate_punches)
     ]
     if non_ambiguous_unused:
         incidents.append("Checada no reconocida")

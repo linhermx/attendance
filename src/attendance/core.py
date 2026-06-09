@@ -26,7 +26,6 @@ REPORT_NAME = "reporte_asistencia.xlsx"
 LOG_NAME = "run_log.txt"
 RANGE_REPORT_NAME = "reporte_asistencia_rango.xlsx"
 RANGE_LOG_NAME = "run_log_rango.txt"
-DUPLICATE_WINDOW_SECONDS = 3 * 60
 QUICK_VIEW_BLOCK_SIZE = 4
 ClassificationPolicyInput = ClassificationPolicy | Mapping[str, object]
 INCIDENT_STATUSES = {"Incidencia", "Retardo + incidencia", "Ambiguo"}
@@ -540,29 +539,6 @@ def select_work_date(events: pd.DataFrame, issues: list[RunIssue]) -> date | Non
             )
         )
     return unique_dates[-1]
-
-
-def dedupe_events(events: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
-    kept_rows: list[dict[str, object]] = []
-    removed_counts: dict[str, int] = {}
-    for user_id, group in events.groupby("id_usuario", sort=False):
-        group = group.sort_values("tiempo")
-        last_kept_time: datetime | None = None
-        for _, row in group.iterrows():
-            current_time = row["tiempo"]
-            if last_kept_time is None:
-                kept_rows.append(row.to_dict())
-                last_kept_time = current_time
-                continue
-            if (current_time - last_kept_time).total_seconds() <= DUPLICATE_WINDOW_SECONDS:
-                removed_counts[user_id] = removed_counts.get(user_id, 0) + 1
-                continue
-            kept_rows.append(row.to_dict())
-            last_kept_time = current_time
-    deduped = pd.DataFrame(kept_rows)
-    if deduped.empty:
-        deduped = events.head(0).copy()
-    return deduped.reset_index(drop=True), removed_counts
 
 
 def build_non_operational_day_rows(
@@ -1354,10 +1330,7 @@ def calculate_attendance(
 
     events = events[events["tiempo"].dt.date == work_date].copy().reset_index(drop=True)
     schedule = schedule_for_date(work_date, issues)
-    if schedule.is_workday:
-        analysis_events, _removed_counts = dedupe_events(events)
-    else:
-        analysis_events = events.copy()
+    analysis_events = events.copy()
     if not schedule.is_workday and not analysis_events.empty:
         issues.append(
             RunIssue(
@@ -1846,9 +1819,8 @@ def calculate_attendance_range(
             continue
 
         operational_day_count += 1
-        deduped_day_events, _removed_counts = dedupe_events(day_events)
         cutoff_time: datetime | None = None
-        day_last_event = deduped_day_events["tiempo"].max()
+        day_last_event = day_events["tiempo"].max()
         assert schedule.exit_time is not None
         if single_date == last_work_date and day_last_event < combine_day_time(single_date, schedule.exit_time):
             cutoff_time = day_last_event
@@ -1856,7 +1828,7 @@ def calculate_attendance_range(
         all_day_frames.append(
             analyze_operational_day(
                 personal,
-                deduped_day_events,
+                day_events,
                 single_date,
                 schedule,
                 cutoff_time=cutoff_time,

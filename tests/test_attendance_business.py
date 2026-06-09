@@ -289,6 +289,85 @@ class ContextualClassificationTests(unittest.TestCase):
         self.assertIn("Registro ambiguo", result["detalle"])
 
 
+class DuplicatePunchNormalizationTests(unittest.TestCase):
+    def test_nearby_entry_duplicate_does_not_create_false_lunch_excess(self) -> None:
+        result = clasificar_checadas(
+            ["08:03:34", "08:06:48", "12:03:12", "19:04:21"],
+            WEEKDAY_SHIFT,
+        )
+        self.assertEqual(result["entrada"], "08:03:34")
+        self.assertEqual(result["inicio_comida"], "12:03:12")
+        self.assertIsNone(result["fin_comida"])
+        self.assertEqual(result["salida"], "19:04:21")
+        self.assertEqual(result["status"], "Retardo + incidencia")
+        self.assertEqual(result["detalle"], "Retardo (3 min) | Sin regreso de comida")
+        self.assertNotIn("Exceso de comida", result["detalle"])
+        self.assertNotIn("Checada no reconocida", result["detalle"])
+        self.assertIn("08:06:48", result["checadas_no_utilizadas"])
+        self.assertEqual(
+            result["checadas_duplicadas"],
+            [
+                {
+                    "duplicada": "08:06:48",
+                    "original": "08:03:34",
+                    "diferencia_segundos": 194,
+                    "bloque_probable": "entrada",
+                }
+            ],
+        )
+        self.assertIn("08:06:48 -> duplicada/no utilizada", result["auditoria"])
+        self.assertIn("Se conserv", result["auditoria"])
+        self.assertIn("08:03:34", result["auditoria"])
+
+    def test_nearby_lunch_out_duplicate_is_not_used_as_lunch_return(self) -> None:
+        result = clasificar_checadas(
+            ["08:00:00", "12:00:05", "12:02:00", "12:30:00", "17:00:00"],
+            WEEKDAY_SHIFT,
+        )
+        self.assertEqual(result["inicio_comida"], "12:00:05")
+        self.assertEqual(result["fin_comida"], "12:30:00")
+        self.assertEqual(result["salida"], "17:00:00")
+        self.assertEqual(result["status"], "Puntual")
+        self.assertEqual(result["detalle"], "")
+        self.assertEqual(result["checadas_duplicadas"][0]["duplicada"], "12:02:00")
+
+    def test_nearby_exit_duplicate_is_not_operational_incident(self) -> None:
+        result = clasificar_checadas(
+            ["08:00:00", "12:00:00", "12:45:00", "17:00:00", "17:03:00"],
+            WEEKDAY_SHIFT,
+        )
+        self.assertEqual(result["salida"], "17:00:00")
+        self.assertEqual(result["status"], "Puntual")
+        self.assertEqual(result["detalle"], "")
+        self.assertEqual(result["checadas_duplicadas"][0]["duplicada"], "17:03:00")
+
+    def test_real_saturday_events_are_not_removed(self) -> None:
+        result = clasificar_checadas(
+            ["08:00:00", "12:00:00", "12:30:00", "14:00:00"],
+            SATURDAY_SHIFT,
+        )
+        self.assertEqual(result["entrada"], "08:00:00")
+        self.assertEqual(result["inicio_comida"], "12:00:00")
+        self.assertEqual(result["fin_comida"], "12:30:00")
+        self.assertEqual(result["salida"], "14:00:00")
+        self.assertEqual(result["status"], "Puntual")
+        self.assertEqual(result["checadas_duplicadas"], [])
+
+    def test_operational_report_keeps_duplicates_in_audit_only(self) -> None:
+        row = operational_row(
+            ["08:03:34", "08:06:48", "12:03:12", "19:04:21"],
+            work_date=date(2026, 6, 5),
+        )
+        self.assertEqual(row["Entrada"], "08:03:34")
+        self.assertEqual(row["Inicio comida"], "12:03:12")
+        self.assertEqual(row["Fin comida"], "")
+        self.assertEqual(row["Salida"], "19:04:21")
+        self.assertEqual(row["Detalle"], "Retardo (3 min) | Sin regreso de comida")
+        self.assertNotIn("Exceso de comida", row["Detalle"])
+        self.assertNotIn("Checada no reconocida", row["Detalle"])
+        self.assertIn("08:06:48 -> duplicada/no utilizada", row["Auditoría clasificación"])
+
+
 class OperationalEvaluationTests(unittest.TestCase):
     def test_schedule_selects_weekday_and_saturday_limits(self) -> None:
         weekday = schedule_for_date(date(2026, 6, 5), [])

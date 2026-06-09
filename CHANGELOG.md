@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.0.2] - 2026-06-09
+
+### Fixed
+
+- Prevented nearby duplicate punches from being used as separate attendance events.
+- Kept duplicate-punch normalization in technical audit without adding operational incidents.
+
 ## [v2.0.1] - 2026-06-08
 
 ### Fixed

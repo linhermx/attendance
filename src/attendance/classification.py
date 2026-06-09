@@ -15,6 +15,7 @@ RIGID_EVENT_KEYS = ("entry", "exit")
 FLEXIBLE_EVENT_KEYS = ("lunch_out", "lunch_return")
 PROTECTED_LUNCH_BEFORE_MINUTES = 15
 PROTECTED_LUNCH_AFTER_MINUTES = 15
+DUPLICATE_PUNCH_SECONDS = 5 * 60
 EVENT_LABELS = {
     "entry": "entrada",
     "lunch_out": "inicio de comida",
@@ -86,6 +87,7 @@ class ClassificationPolicy:
     max_candidates_per_event: int = 12
     isolated_lunch_decisive_minutes: int = 15
     maximum_lunch_pair_minutes: int = 240
+    duplicate_punch_seconds: int = DUPLICATE_PUNCH_SECONDS
 
     def __post_init__(self) -> None:
         missing = [event_key for event_key in EVENT_KEYS if event_key not in self.windows]
@@ -99,6 +101,8 @@ class ClassificationPolicy:
             raise ValueError("isolated_lunch_decisive_minutes no puede ser negativo.")
         if self.maximum_lunch_pair_minutes < 45:
             raise ValueError("maximum_lunch_pair_minutes debe ser al menos 45.")
+        if self.duplicate_punch_seconds < 0:
+            raise ValueError("duplicate_punch_seconds no puede ser negativo.")
 
 
 @dataclass(frozen=True)
@@ -106,6 +110,20 @@ class Punch:
     punch_id: int
     checked_at: datetime
     state: str = ""
+
+
+@dataclass(frozen=True)
+class DuplicatePunch:
+    duplicate: Punch
+    original: Punch
+    seconds_apart: int
+    block: str
+
+
+@dataclass(frozen=True)
+class NormalizedPunches:
+    usable_punches: list[Punch]
+    duplicate_punches: list[DuplicatePunch]
 
 
 @dataclass(frozen=True)
@@ -141,6 +159,7 @@ class ClassificationResult:
     confidence: dict[int, CandidateScore]
     unused_punches: list[Punch]
     ambiguous_punches: list[Punch]
+    duplicate_punches: list[DuplicatePunch]
     technical_flags: list[str]
     hypothesis_score: float
     alternative_score: float | None
@@ -247,6 +266,15 @@ def resolve_policy(
                 tolerances.get(
                     "maximum_lunch_pair_minutes",
                     base_policy.maximum_lunch_pair_minutes,
+                ),
+            )
+        ),
+        duplicate_punch_seconds=int(
+            tolerances.get(
+                "duplicado_segundos",
+                tolerances.get(
+                    "duplicate_punch_seconds",
+                    base_policy.duplicate_punch_seconds,
                 ),
             )
         ),
@@ -420,6 +448,115 @@ def _has_strong_exit_hint(punch: Punch) -> bool:
     return strong_hint and hint == "exit"
 
 
+def _duplicate_block_label(block: str) -> str:
+    if block in FLEXIBLE_EVENT_KEYS or block == "lunch":
+        return "comida"
+    return EVENT_LABELS.get(block, block)
+
+
+def _same_strong_hint_block(left: Punch, right: Punch) -> str | None:
+    left_hint, left_strong = _state_hint(left.state)
+    right_hint, right_strong = _state_hint(right.state)
+    if left_strong and right_strong and left_hint != right_hint:
+        return None
+    strong_hints = [hint for hint, strong in ((left_hint, left_strong), (right_hint, right_strong)) if strong]
+    if not strong_hints:
+        return None
+    hint = strong_hints[0]
+    if hint in FLEXIBLE_EVENT_KEYS:
+        return "lunch"
+    return hint
+
+
+def _rigid_duplicate_block(
+    left: Punch,
+    right: Punch,
+    event: ExpectedEvent,
+    policy: ClassificationPolicy,
+) -> str | None:
+    left_candidate = _rigid_candidate_score(left, event)
+    right_candidate = _rigid_candidate_score(right, event)
+    if (
+        left_candidate is not None
+        and right_candidate is not None
+        and left_candidate.score >= policy.minimum_score
+        and right_candidate.score >= policy.minimum_score
+    ):
+        return event.key
+    return None
+
+
+def _flexible_duplicate_block(
+    left: Punch,
+    right: Punch,
+    event: ExpectedEvent,
+) -> str | None:
+    left_candidate = _flexible_candidate_score(left, event)
+    right_candidate = _flexible_candidate_score(right, event)
+    if left_candidate.inside_window and right_candidate.inside_window:
+        return "lunch"
+    return None
+
+
+def _duplicate_block_for_pair(
+    left: Punch,
+    right: Punch,
+    expected_events: Sequence[ExpectedEvent],
+    policy: ClassificationPolicy,
+) -> str | None:
+    hinted_block = _same_strong_hint_block(left, right)
+    if hinted_block is not None:
+        return hinted_block
+
+    events_by_key = {event.key: event for event in expected_events}
+    if _inside_protected_lunch_zone(left, events_by_key) and _inside_protected_lunch_zone(right, events_by_key):
+        return "lunch"
+
+    for event_key in ("entry", "exit"):
+        block = _rigid_duplicate_block(left, right, events_by_key[event_key], policy)
+        if block is not None:
+            return block
+
+    for event_key in FLEXIBLE_EVENT_KEYS:
+        block = _flexible_duplicate_block(left, right, events_by_key[event_key])
+        if block is not None:
+            return block
+
+    return None
+
+
+def normalize_punches(
+    punches: Sequence[Punch],
+    expected_events: Sequence[ExpectedEvent],
+    policy: ClassificationPolicy,
+) -> NormalizedPunches:
+    if policy.duplicate_punch_seconds <= 0:
+        return NormalizedPunches(list(punches), [])
+
+    usable_punches: list[Punch] = []
+    duplicate_punches: list[DuplicatePunch] = []
+    for punch in punches:
+        if not usable_punches:
+            usable_punches.append(punch)
+            continue
+        previous = usable_punches[-1]
+        seconds_apart = int((punch.checked_at - previous.checked_at).total_seconds())
+        if 0 <= seconds_apart <= policy.duplicate_punch_seconds:
+            block = _duplicate_block_for_pair(previous, punch, expected_events, policy)
+            if block is not None:
+                duplicate_punches.append(
+                    DuplicatePunch(
+                        duplicate=punch,
+                        original=previous,
+                        seconds_apart=seconds_apart,
+                        block=block,
+                    )
+                )
+                continue
+        usable_punches.append(punch)
+    return NormalizedPunches(usable_punches, duplicate_punches)
+
+
 def _contextual_late_entry_punch_id(
     punches: Sequence[Punch],
     expected_events: Sequence[ExpectedEvent],
@@ -577,8 +714,16 @@ def classify_punches(
     if len(punches_by_id) != len(sorted_punches):
         raise ValueError("Cada checada debe tener un punch_id único.")
 
-    hypotheses, candidates = _build_hypotheses(
+    normalized = normalize_punches(
         sorted_punches,
+        [events_by_key[key] for key in EVENT_KEYS],
+        policy,
+    )
+    usable_punches = normalized.usable_punches
+    usable_punches_by_id = {punch.punch_id: punch for punch in usable_punches}
+
+    hypotheses, candidates = _build_hypotheses(
+        usable_punches,
         [events_by_key[key] for key in EVENT_KEYS],
         policy,
     )
@@ -605,7 +750,7 @@ def classify_punches(
     if contextual_entry_selected and selected["exit"] is not None:
         intermediate_punches = [
             punch
-            for punch in sorted_punches
+            for punch in usable_punches
             if punch.punch_id not in {selected["entry"], selected["exit"]}
         ]
         if len(intermediate_punches) == 1:
@@ -619,7 +764,7 @@ def classify_punches(
                 partial_meal_ambiguous = True
 
     lunch_out_id = selected["lunch_out"]
-    if len(sorted_punches) == 1 and lunch_out_id is not None:
+    if len(usable_punches) == 1 and lunch_out_id is not None:
         lunch_candidate = candidates[(lunch_out_id, "lunch_out")]
         if abs(lunch_candidate.signed_distance_minutes) > policy.isolated_lunch_decisive_minutes:
             ambiguous_ids.add(lunch_out_id)
@@ -629,7 +774,7 @@ def classify_punches(
             selected[event_key] = None
 
     assignments = {
-        event_key: punches_by_id[punch_id] if punch_id is not None else None
+        event_key: usable_punches_by_id[punch_id] if punch_id is not None else None
         for event_key, punch_id in selected.items()
     }
     confidence = {
@@ -642,6 +787,8 @@ def classify_punches(
     unused_punches = [punch for punch in sorted_punches if punch.punch_id not in selected_ids]
 
     technical_flags: list[str] = []
+    if normalized.duplicate_punches:
+        technical_flags.append("Checada duplicada omitida por normalizacion")
     if ambiguous_punches:
         technical_flags.append("Asignación ambigua")
     if contextual_entry_selected:
@@ -667,6 +814,7 @@ def classify_punches(
         confidence=confidence,
         unused_punches=unused_punches,
         ambiguous_punches=ambiguous_punches,
+        duplicate_punches=normalized.duplicate_punches,
         technical_flags=technical_flags,
         hypothesis_score=best.score,
         alternative_score=second.score if second is not None else None,
@@ -720,9 +868,11 @@ def format_classification_audit(
     if result.technical_flags:
         parts.append("Alertas técnicas=" + ", ".join(result.technical_flags))
     ambiguous_ids = {punch.punch_id for punch in result.ambiguous_punches}
+    duplicates_by_id = {duplicate.duplicate.punch_id: duplicate for duplicate in result.duplicate_punches}
     for punch in sorted(punches, key=lambda item: (item.checked_at, item.punch_id)):
         checked_at = punch.checked_at.strftime("%H:%M:%S")
         selected = result.confidence.get(punch.punch_id)
+        duplicate = duplicates_by_id.get(punch.punch_id)
         punch_candidates = sorted(
             (candidate for (punch_id, _), candidate in result.candidates.items() if punch_id == punch.punch_id),
             key=lambda item: item.score,
@@ -736,6 +886,13 @@ def format_classification_audit(
             parts.append(
                 f"{checked_at} -> {EVENT_LABELS[selected.event_key]} (score={selected.score:.1f}). "
                 f"{_assignment_reason(punch, selected, expected_events)} Alternativas: {alternatives}."
+            )
+        elif duplicate is not None:
+            original_at = duplicate.original.checked_at.strftime("%H:%M:%S")
+            parts.append(
+                f"{checked_at} -> duplicada/no utilizada. "
+                f"Se conservo {original_at}; diferencia={duplicate.seconds_apart} s; "
+                f"bloque probable={_duplicate_block_label(duplicate.block)}. Alternativas: {alternatives}."
             )
         elif punch.punch_id in ambiguous_ids:
             parts.append(f"{checked_at} -> sin asignar por ambigüedad. Alternativas: {alternatives}.")
@@ -791,14 +948,27 @@ def clasificar_checadas(
 
     confidence: dict[str, dict[str, object]] = {}
     used_keys: set[str] = set()
+    duplicates_by_id = {duplicate.duplicate.punch_id: duplicate for duplicate in result.duplicate_punches}
     for punch in sorted(punches, key=lambda item: (item.checked_at, item.punch_id)):
         key = _unique_time_key(punch, used_keys)
         candidate = result.confidence.get(punch.punch_id)
+        duplicate = duplicates_by_id.get(punch.punch_id)
         if candidate is not None:
             confidence[key] = {
                 "evento_asignado": PUBLIC_EVENT_KEYS[candidate.event_key],
                 "score": f"{candidate.score:.1f}",
                 "razon": _assignment_reason(punch, candidate, expected_events),
+            }
+        elif duplicate is not None:
+            original_at = duplicate.original.checked_at.strftime("%H:%M:%S")
+            confidence[key] = {
+                "evento_asignado": None,
+                "score": "0.0",
+                "razon": (
+                    f"Checada duplicada cercana a {original_at}; "
+                    f"diferencia={duplicate.seconds_apart} s; "
+                    f"bloque probable={_duplicate_block_label(duplicate.block)}."
+                ),
             }
         else:
             confidence[key] = {
@@ -817,6 +987,15 @@ def clasificar_checadas(
         "incidencias": evaluation.operational_incidents,
         "checadas_no_utilizadas": [
             punch.checked_at.strftime("%H:%M:%S") for punch in result.unused_punches
+        ],
+        "checadas_duplicadas": [
+            {
+                "duplicada": duplicate.duplicate.checked_at.strftime("%H:%M:%S"),
+                "original": duplicate.original.checked_at.strftime("%H:%M:%S"),
+                "diferencia_segundos": duplicate.seconds_apart,
+                "bloque_probable": _duplicate_block_label(duplicate.block),
+            }
+            for duplicate in result.duplicate_punches
         ],
         "confianza": confidence,
         "auditoria": format_classification_audit(punches, expected_events, result),
