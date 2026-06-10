@@ -288,6 +288,27 @@ class ContextualClassificationTests(unittest.TestCase):
         self.assertEqual(result["status"], "Ambiguo")
         self.assertIn("Registro ambiguo", result["detalle"])
 
+    def test_late_entry_with_complete_lunch_without_final_exit_is_not_ambiguous(self) -> None:
+        result = clasificar_checadas(
+            ["11:59:00", "12:09:00", "12:48:00"],
+            WEEKDAY_SHIFT,
+        )
+        self.assertEqual(result["entrada"], "11:59:00")
+        self.assertEqual(result["inicio_comida"], "12:09:00")
+        self.assertEqual(result["fin_comida"], "12:48:00")
+        self.assertIsNone(result["salida"])
+        self.assertEqual(result["status"], "Retardo + incidencia")
+        self.assertEqual(result["detalle"], "Retardo grave (239 min) | Sin salida final")
+        self.assertNotIn("Sin entrada", result["detalle"])
+        self.assertNotIn("Registro ambiguo", result["detalle"])
+
+    def test_single_punch_before_lunch_without_later_evidence_does_not_invent_entry(self) -> None:
+        result = clasificar_checadas(["11:59:00"], WEEKDAY_SHIFT)
+        self.assertIsNone(result["entrada"])
+        self.assertEqual(result["inicio_comida"], "11:59:00")
+        self.assertEqual(result["status"], "Incidencia")
+        self.assertIn("Sin entrada", result["detalle"])
+
 
 class DuplicatePunchNormalizationTests(unittest.TestCase):
     def test_nearby_entry_duplicate_does_not_create_false_lunch_excess(self) -> None:

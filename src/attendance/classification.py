@@ -405,6 +405,31 @@ def _contextual_late_entry_candidate(punch: Punch, event: ExpectedEvent) -> Cand
     )
 
 
+def _has_plausible_lunch_pair_after_first(
+    punches: Sequence[Punch],
+    expected_events: Sequence[ExpectedEvent],
+) -> bool:
+    if len(punches) < 3:
+        return False
+    events = {event.key: event for event in expected_events}
+    reference_lunch_seconds = int(
+        (
+            events["lunch_return"].expected_at
+            - events["lunch_out"].expected_at
+        ).total_seconds()
+    )
+    if reference_lunch_seconds <= 0:
+        return False
+    for index, lunch_out in enumerate(punches[1:-1], start=1):
+        if not _inside_protected_lunch_zone(lunch_out, events):
+            continue
+        for lunch_return in punches[index + 1 :]:
+            duration_seconds = (lunch_return.checked_at - lunch_out.checked_at).total_seconds()
+            if 5 * 60 <= duration_seconds <= reference_lunch_seconds:
+                return True
+    return False
+
+
 def _flexible_candidate_score(punch: Punch, event: ExpectedEvent) -> CandidateScore:
     signed_distance = (punch.checked_at - event.expected_at).total_seconds() / 60
     distance = abs(signed_distance)
@@ -576,7 +601,11 @@ def _contextual_late_entry_punch_id(
         and candidate.score >= policy.minimum_score
         for punch in punches[1:]
     )
-    return first.punch_id if later_exit_exists else None
+    plausible_lunch_pair_exists = _has_plausible_lunch_pair_after_first(
+        punches,
+        expected_events,
+    )
+    return first.punch_id if later_exit_exists or plausible_lunch_pair_exists else None
 
 
 def _score_hypothesis(
@@ -839,7 +868,7 @@ def _assignment_reason(
     elif candidate.basis == "entrada tardía contextual":
         reason = (
             "Asignada como entrada tardía contextual porque es la primera checada anterior "
-            "a la referencia de comida y existe una salida final posterior plausible."
+            "a la referencia de comida y existe evidencia posterior compatible con jornada iniciada."
         )
     else:
         position = "dentro" if candidate.inside_window else "en la extensión"

@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.0.3] - 2026-06-10
+
+### Fixed
+
+- Classified a late first punch before lunch as a contextual late entry when followed by a coherent lunch pair, even if the final exit punch is missing.
+- Avoided inventing an entry for isolated pre-lunch punches without later evidence to support a started shift.
+
 ## [v2.0.2] - 2026-06-09
 
 ### Fixed
