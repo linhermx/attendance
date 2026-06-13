@@ -110,6 +110,7 @@ class Punch:
     punch_id: int
     checked_at: datetime
     state: str = ""
+    device: str = ""
 
 
 @dataclass(frozen=True)
@@ -328,13 +329,16 @@ def build_expected_events(
     ]
 
 
-def _state_hint(state: str) -> tuple[str | None, bool]:
+def _state_hint(state: str, device: str = "") -> tuple[str | None, bool]:
     normalized = _normalize_text(state)
     strong_hints = (
         ("salida a descanso", "lunch_out"),
+        ("salida de descanso", "lunch_out"),
         ("salida de comida", "lunch_out"),
         ("inicio comida", "lunch_out"),
         ("regreso descanso", "lunch_return"),
+        ("regreso de descanso", "lunch_return"),
+        ("regreso descando", "lunch_return"),
         ("regreso de comida", "lunch_return"),
         ("fin comida", "lunch_return"),
         ("salida final", "exit"),
@@ -362,7 +366,7 @@ def _rigid_candidate_score(punch: Punch, event: ExpectedEvent) -> CandidateScore
         score = 50.0 - 25.0 * ((distance - strict_limit) / max(maximum_limit - strict_limit, 1))
     else:
         return None
-    hint, strong_hint = _state_hint(punch.state)
+    hint, strong_hint = _state_hint(punch.state, punch.device)
     state_match = hint == event.key
     state_conflict = bool(strong_hint and hint is not None and hint != event.key)
     if state_match:
@@ -385,7 +389,7 @@ def _rigid_candidate_score(punch: Punch, event: ExpectedEvent) -> CandidateScore
 
 def _contextual_late_entry_candidate(punch: Punch, event: ExpectedEvent) -> CandidateScore:
     signed_distance = (punch.checked_at - event.expected_at).total_seconds() / 60
-    hint, strong_hint = _state_hint(punch.state)
+    hint, strong_hint = _state_hint(punch.state, punch.device)
     state_match = hint == "entry"
     state_conflict = bool(strong_hint and hint is not None and hint != "entry")
     score = max(65.0, 90.0 - max(0.0, signed_distance) * 0.08)
@@ -436,7 +440,7 @@ def _flexible_candidate_score(punch: Punch, event: ExpectedEvent) -> CandidateSc
     strict_limit = event.window.before_minutes if signed_distance < 0 else event.window.after_minutes
     # La referencia horaria pesa poco y nunca excluye una comida coherente.
     score = max(18.0, 42.0 - min(distance, 480.0) * 0.05)
-    hint, strong_hint = _state_hint(punch.state)
+    hint, strong_hint = _state_hint(punch.state, punch.device)
     state_match = hint == event.key
     state_conflict = bool(strong_hint and hint is not None and hint != event.key)
     if state_match:
@@ -469,7 +473,7 @@ def _inside_protected_lunch_zone(
 
 
 def _has_strong_exit_hint(punch: Punch) -> bool:
-    hint, strong_hint = _state_hint(punch.state)
+    hint, strong_hint = _state_hint(punch.state, punch.device)
     return strong_hint and hint == "exit"
 
 
@@ -480,8 +484,8 @@ def _duplicate_block_label(block: str) -> str:
 
 
 def _same_strong_hint_block(left: Punch, right: Punch) -> str | None:
-    left_hint, left_strong = _state_hint(left.state)
-    right_hint, right_strong = _state_hint(right.state)
+    left_hint, left_strong = _state_hint(left.state, left.device)
+    right_hint, right_strong = _state_hint(right.state, right.device)
     if left_strong and right_strong and left_hint != right_hint:
         return None
     strong_hints = [hint for hint, strong in ((left_hint, left_strong), (right_hint, right_strong)) if strong]
@@ -593,7 +597,7 @@ def _contextual_late_entry_punch_id(
     first = punches[0]
     if first.checked_at >= events["lunch_out"].expected_at:
         return None
-    hint, strong_hint = _state_hint(first.state)
+    hint, strong_hint = _state_hint(first.state, first.device)
     if strong_hint and hint in FLEXIBLE_EVENT_KEYS:
         return None
     later_exit_exists = any(
@@ -633,6 +637,16 @@ def _score_hypothesis(
         for event_key, punch_id in assignments.items()
         if punch_id is not None
     )
+    assigned_ids_in_event_order = [assignments[event_key] for event_key in EVENT_KEYS]
+    if len(punches_by_id) == len(EVENT_KEYS) and all(
+        punch_id is not None for punch_id in assigned_ids_in_event_order
+    ):
+        chronological_ids = [
+            punch.punch_id
+            for punch in sorted(punches_by_id.values(), key=lambda item: (item.checked_at, item.punch_id))
+        ]
+        if assigned_ids_in_event_order == chronological_ids:
+            score += 45.0
     lunch_out_id = assignments["lunch_out"]
     lunch_return_id = assignments["lunch_return"]
     if lunch_out_id is not None and lunch_return_id is not None:
@@ -784,7 +798,7 @@ def classify_punches(
         ]
         if len(intermediate_punches) == 1:
             intermediate = intermediate_punches[0]
-            hint, strong_hint = _state_hint(intermediate.state)
+            hint, strong_hint = _state_hint(intermediate.state, intermediate.device)
             if not (strong_hint and hint in FLEXIBLE_EVENT_KEYS):
                 for event_key in FLEXIBLE_EVENT_KEYS:
                     if selected[event_key] == intermediate.punch_id:
@@ -900,6 +914,7 @@ def format_classification_audit(
     duplicates_by_id = {duplicate.duplicate.punch_id: duplicate for duplicate in result.duplicate_punches}
     for punch in sorted(punches, key=lambda item: (item.checked_at, item.punch_id)):
         checked_at = punch.checked_at.strftime("%H:%M:%S")
+        source_context = _punch_source_context(punch)
         selected = result.confidence.get(punch.punch_id)
         duplicate = duplicates_by_id.get(punch.punch_id)
         punch_candidates = sorted(
@@ -913,20 +928,24 @@ def format_classification_audit(
         ) or "ninguna"
         if selected is not None:
             parts.append(
-                f"{checked_at} -> {EVENT_LABELS[selected.event_key]} (score={selected.score:.1f}). "
+                f"{checked_at}{source_context} -> {EVENT_LABELS[selected.event_key]} "
+                f"(score={selected.score:.1f}). "
                 f"{_assignment_reason(punch, selected, expected_events)} Alternativas: {alternatives}."
             )
         elif duplicate is not None:
             original_at = duplicate.original.checked_at.strftime("%H:%M:%S")
             parts.append(
-                f"{checked_at} -> duplicada/no utilizada. "
+                f"{checked_at}{source_context} -> duplicada/no utilizada. "
                 f"Se conservo {original_at}; diferencia={duplicate.seconds_apart} s; "
                 f"bloque probable={_duplicate_block_label(duplicate.block)}. Alternativas: {alternatives}."
             )
         elif punch.punch_id in ambiguous_ids:
-            parts.append(f"{checked_at} -> sin asignar por ambigüedad. Alternativas: {alternatives}.")
+            parts.append(
+                f"{checked_at}{source_context} -> sin asignar por ambigüedad. "
+                f"Alternativas: {alternatives}."
+            )
         else:
-            parts.append(f"{checked_at} -> no utilizada. Alternativas: {alternatives}.")
+            parts.append(f"{checked_at}{source_context} -> no utilizada. Alternativas: {alternatives}.")
     return " | ".join(parts)
 
 
@@ -943,14 +962,29 @@ def _unique_time_key(punch: Punch, used_keys: set[str]) -> str:
     return key
 
 
+def _punch_source_context(punch: Punch) -> str:
+    parts: list[str] = []
+    if punch.state:
+        parts.append(f"estado={punch.state}")
+    if punch.device:
+        parts.append(f"dispositivo={punch.device}")
+    return (" [" + "; ".join(parts) + "]") if parts else ""
+
+
 def clasificar_checadas(
     checadas: Sequence[str | datetime],
     turno: Mapping[str, object],
     tolerancias: ClassificationPolicy | Mapping[str, object] | None = None,
+    estados: Sequence[str] | None = None,
+    dispositivos: Sequence[str] | None = None,
 ) -> dict[str, object]:
     from .business import BusinessPolicy, evaluate_business
 
     policy = resolve_policy(tolerancias)
+    if estados is not None and len(estados) != len(checadas):
+        raise ValueError("estados debe tener la misma cantidad de elementos que checadas.")
+    if dispositivos is not None and len(dispositivos) != len(checadas):
+        raise ValueError("dispositivos debe tener la misma cantidad de elementos que checadas.")
     explicit_dates = {value.date() for value in checadas if isinstance(value, datetime)}
     if len(explicit_dates) > 1:
         raise ValueError("Todas las checadas deben pertenecer al mismo día.")
@@ -959,7 +993,15 @@ def clasificar_checadas(
         value if isinstance(value, datetime) else datetime.combine(base_date, _parse_time(value))
         for value in checadas
     ]
-    punches = [Punch(index, checked_at) for index, checked_at in enumerate(parsed)]
+    punches = [
+        Punch(
+            index,
+            checked_at,
+            state=estados[index] if estados is not None else "",
+            device=dispositivos[index] if dispositivos is not None else "",
+        )
+        for index, checked_at in enumerate(parsed)
+    ]
     expected_events = build_expected_events(turno, base_date, policy)
     result = classify_punches(punches, expected_events, policy)
     expected_by_key = {event.key: event for event in expected_events}

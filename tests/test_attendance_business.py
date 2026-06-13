@@ -245,6 +245,50 @@ class FlexibleLunchTests(unittest.TestCase):
 
 
 class ContextualClassificationTests(unittest.TestCase):
+    def test_explicit_device_states_are_used_without_making_lunch_rigid(self) -> None:
+        result = clasificar_checadas(
+            ["11:59:00", "12:09:00", "12:48:00"],
+            WEEKDAY_SHIFT,
+            estados=["Entrada", "Salida a descanso", "Regreso descanso"],
+            dispositivos=["CHECADOR_PRODUCCION", "CHECADOR_PRODUCCION", "CHECADOR_PRODUCCION"],
+        )
+        self.assertEqual(result["entrada"], "11:59:00")
+        self.assertEqual(result["inicio_comida"], "12:09:00")
+        self.assertEqual(result["fin_comida"], "12:48:00")
+        self.assertIsNone(result["salida"])
+        self.assertEqual(result["detalle"], "Retardo grave (239 min) | Sin salida final")
+        self.assertIn("estado=Salida a descanso", result["auditoria"])
+        self.assertIn("dispositivo=CHECADOR_PRODUCCION", result["auditoria"])
+
+    def test_legacy_generic_production_states_still_follow_context(self) -> None:
+        result = clasificar_checadas(
+            ["08:00:00", "12:00:00", "12:45:00", "17:00:00"],
+            WEEKDAY_SHIFT,
+            estados=["Entrada", "Entrada", "Entrada", "Salida"],
+            dispositivos=["CHECADOR_PRODUCCION"] * 4,
+        )
+        self.assertEqual(result["entrada"], "08:00:00")
+        self.assertEqual(result["inicio_comida"], "12:00:00")
+        self.assertEqual(result["fin_comida"], "12:45:00")
+        self.assertEqual(result["salida"], "17:00:00")
+        self.assertEqual(result["status"], "Puntual")
+        self.assertEqual(result["detalle"], "")
+
+    def test_wrong_selected_state_near_lunch_is_corrected_by_context(self) -> None:
+        result = clasificar_checadas(
+            ["08:00:00", "12:05:00", "12:45:00", "17:00:00"],
+            WEEKDAY_SHIFT,
+            estados=["Entrada", "Salida", "Entrada", "Salida"],
+            dispositivos=["CHECADOR_PRODUCCION"] * 4,
+        )
+        self.assertEqual(result["entrada"], "08:00:00")
+        self.assertEqual(result["inicio_comida"], "12:05:00")
+        self.assertEqual(result["fin_comida"], "12:45:00")
+        self.assertEqual(result["salida"], "17:00:00")
+        self.assertEqual(result["status"], "Puntual")
+        self.assertEqual(result["detalle"], "")
+        self.assertNotIn("Salida anticipada", result["detalle"])
+
     def test_severe_tardy_with_complete_lunch_has_only_tardy_detail(self) -> None:
         result = clasificar_checadas(
             ["10:00:00", "13:00:00", "13:30:00", "17:00:00"],
@@ -301,6 +345,36 @@ class ContextualClassificationTests(unittest.TestCase):
         self.assertEqual(result["detalle"], "Retardo grave (239 min) | Sin salida final")
         self.assertNotIn("Sin entrada", result["detalle"])
         self.assertNotIn("Registro ambiguo", result["detalle"])
+
+    def test_operational_detail_does_not_show_state_or_device_audit_context(self) -> None:
+        work_date = date(2026, 6, 5)
+        events = pd.DataFrame(
+            [
+                {
+                    "id_usuario": "1",
+                    "tiempo": pd.Timestamp(f"{work_date} {checked_at}"),
+                    "estado": state,
+                    "dispositivo": "CHECADOR_PRODUCCION",
+                }
+                for checked_at, state in (
+                    ("11:59:00", "Entrada"),
+                    ("12:09:00", "Salida a descanso"),
+                    ("12:48:00", "Regreso descanso"),
+                )
+            ]
+        )
+        row = analyze_operational_day(
+            prepared_personal().iloc[[0]].copy(),
+            events,
+            work_date,
+            schedule_for_date(work_date, []),
+        ).iloc[0]
+        audit_column = next(column for column in row.index if str(column).startswith("Auditor"))
+        self.assertEqual(row["Detalle"], "Retardo grave (239 min) | Sin salida final")
+        self.assertNotIn("CHECADOR", row["Detalle"])
+        self.assertNotIn("Salida a descanso", row["Detalle"])
+        self.assertIn("dispositivo=CHECADOR_PRODUCCION", row[audit_column])
+        self.assertIn("estado=Salida a descanso", row[audit_column])
 
     def test_single_punch_before_lunch_without_later_evidence_does_not_invent_entry(self) -> None:
         result = clasificar_checadas(["11:59:00"], WEEKDAY_SHIFT)

@@ -690,7 +690,8 @@ def analyze_operational_day(
             Punch(
                 punch_id=position,
                 checked_at=row["tiempo"],
-                state=str(row.get("estado_normalizado", "")),
+                state=str(row.get("estado", row.get("estado_normalizado", ""))),
+                device=str(row.get("dispositivo", "")),
             )
             for position, (_, row) in enumerate(employee_events.iterrows())
         ]
