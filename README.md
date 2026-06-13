@@ -10,6 +10,8 @@ Herramienta para analizar control de asistencia a partir de archivos exportados 
 
 - análisis diario y por rango;
 - clasificación contextual de entrada, inicio de comida, regreso de comida y salida;
+- uso de estado registrado por el checador y dispositivo de origen como señales auditables de clasificación;
+- normalización de checadas duplicadas cercanas antes de clasificar eventos;
 - detección de retardos, faltas, omisiones, registros ambiguos y salidas anticipadas;
 - cálculo de horas trabajadas únicamente con cuatro checadas reales, completas y ordenadas;
 - reportes Excel con detalle operativo y una hoja separada de auditoría técnica;
@@ -23,8 +25,12 @@ Herramienta para analizar control de asistencia a partir de archivos exportados 
 - Inicio y regreso de comida son eventos flexibles.
 - La hora programada de comida se usa solamente como referencia débil para clasificación.
 - Una pareja cronológica coherente puede clasificarse como comida aunque ocurra después de la referencia.
+- El estado registrado por el checador se usa como señal fuerte cuando identifica explícitamente entrada, salida a descanso, regreso de descanso o salida.
+- Los estados genéricos `Entrada` y `Salida` se validan contra horario, secuencia y duración para evitar clasificaciones incorrectas.
+- Si existen cuatro checadas utilizables, la secuencia entrada-comida-regreso-salida refuerza la hipótesis, pero no sustituye las reglas de contexto.
 - La primera checada del día no se considera entrada automáticamente.
 - La primera checada anterior a la referencia de comida se prioriza como entrada tardía cuando existe una salida final posterior plausible.
+- Una selección incorrecta del tipo de checada puede corregirse por contexto y queda explicada en auditoría técnica.
 - Las checadas ambiguas no se fuerzan.
 - Nunca se crean ni sustituyen horas faltantes.
 
@@ -81,7 +87,7 @@ Los reportes principales incluyen:
 - `Detalle diario` o `Detalle consolidado`
 - `Auditoría clasificación`
 
-`Detalle`, `Detalle diario`, `Detalle consolidado` y las vistas de la GUI contienen únicamente información operativa. Scores, referencias horarias, alternativas, checadas dominicales y razones de asignación se conservan exclusivamente en la hoja `Auditoría clasificación`.
+`Detalle`, `Detalle diario`, `Detalle consolidado` y las vistas de la GUI contienen únicamente información operativa. Scores, referencias horarias, alternativas, estado registrado por el checador, dispositivo de origen, checadas dominicales y razones de asignación se conservan exclusivamente en la hoja `Auditoría clasificación`.
 
 La Vista rápida se construye únicamente con IDs y nombres presentes en la BBDD de personal cargada. Los archivos y carpetas de salida ubicados en testing, fixtures, mocks, demo, examples, evidence o casos no pueden utilizarse para un reporte operativo.
 

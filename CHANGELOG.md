@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.1.0] - 2026-06-13
+
+### Changed
+
+- Classification now uses the punch state and source device as auditable evidence while still validating assignments against schedule, sequence, duplicate normalization, and lunch duration.
+- Explicit meal-state punches are treated as strong classification hints without making lunch schedules rigid.
+- Complete four-punch sequences can reinforce a valid entry, lunch-out, lunch-return, and exit hypothesis without reverting to positional-only assignment.
+
+### Fixed
+
+- Improved late-entry and lunch-pair classification when source punch states are generic or incorrectly selected by the user.
+- Kept source state and device details in the technical audit instead of operational report detail.
+
 ## [v2.0.3] - 2026-06-10
 
 ### Fixed
