@@ -30,6 +30,7 @@ Herramienta para analizar control de asistencia a partir de archivos exportados 
 - Si existen cuatro checadas utilizables, la secuencia entrada-comida-regreso-salida refuerza la hipótesis, pero no sustituye las reglas de contexto.
 - La primera checada del día no se considera entrada automáticamente.
 - La primera checada anterior a la referencia de comida se prioriza como entrada tardía cuando existe una salida final posterior plausible.
+- Una checada aislada dentro del bloque flexible de comida se asigna al evento de comida más cercano cuando la diferencia es decisiva.
 - Una selección incorrecta del tipo de checada puede corregirse por contexto y queda explicada en auditoría técnica.
 - Las checadas ambiguas no se fuerzan.
 - Nunca se crean ni sustituyen horas faltantes.

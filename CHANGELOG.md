@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.1.1] - 2026-06-15
+
+### Fixed
+
+- Assigned isolated meal-period punches to the nearest flexible meal event when the distance is decisive, instead of leaving them fully ambiguous.
+- Prevented isolated return-from-meal punches from being reported as missing both meal events when only the meal start is actually missing.
+
 ## [v2.1.0] - 2026-06-13
 
 ### Changed

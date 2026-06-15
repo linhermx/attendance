@@ -24,6 +24,8 @@ Una checada fuera del límite máximo de un evento rígido no se fuerza a ocupar
 
 La primera checada anterior a la referencia teórica de comida tiene prioridad como entrada tardía contextual cuando existe una salida final posterior plausible y no hay una marca explícita de comida. Una única checada intermedia sin pareja queda sin asignar en auditoría y produce `Registro incompleto`, evitando duraciones de comida falsas.
 
+Una checada aislada dentro del bloque flexible de comida no se deja en blanco si una de las referencias (`inicio de comida` o `fin de comida`) gana de forma clara por cercanía. En ese caso se asigna al evento flexible más cercano y la evaluación operativa reporta únicamente las omisiones realmente observables.
+
 ## Estado y dispositivo del checador
 
 Los estados explícitos del checador se usan como señales fuertes:
@@ -175,3 +177,14 @@ Detalle: Sin entrada | Sin regreso de comida | Sin salida final
 ```
 
 La auditoría conserva por qué la checada fue tomada como inicio de comida y no como entrada.
+
+Para una única checada cercana al regreso esperado, por ejemplo `12:44:56` entre semana o `12:29:58` en sábado:
+
+```text
+Entrada: --
+Inicio comida: --
+Fin comida: 12:44:56
+Salida: --
+Status: Incidencia
+Detalle: Sin entrada | Sin inicio de comida | Sin salida final
+```
