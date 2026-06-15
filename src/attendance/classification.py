@@ -472,6 +472,21 @@ def _inside_protected_lunch_zone(
     return protected_start <= punch.checked_at <= protected_end
 
 
+def _decisive_isolated_lunch_event(
+    punch: Punch,
+    events_by_key: Mapping[str, ExpectedEvent],
+    policy: ClassificationPolicy,
+) -> str | None:
+    distances = {
+        event_key: abs((punch.checked_at - events_by_key[event_key].expected_at).total_seconds() / 60)
+        for event_key in FLEXIBLE_EVENT_KEYS
+    }
+    event_key, distance = min(distances.items(), key=lambda item: item[1])
+    if distance <= policy.isolated_lunch_decisive_minutes:
+        return event_key
+    return None
+
+
 def _has_strong_exit_hint(punch: Punch) -> bool:
     hint, strong_hint = _state_hint(punch.state, punch.device)
     return strong_hint and hint == "exit"
@@ -806,11 +821,26 @@ def classify_punches(
                 ambiguous_ids.add(intermediate.punch_id)
                 partial_meal_ambiguous = True
 
-    lunch_out_id = selected["lunch_out"]
-    if len(usable_punches) == 1 and lunch_out_id is not None:
-        lunch_candidate = candidates[(lunch_out_id, "lunch_out")]
-        if abs(lunch_candidate.signed_distance_minutes) > policy.isolated_lunch_decisive_minutes:
-            ambiguous_ids.add(lunch_out_id)
+    if len(usable_punches) == 1:
+        isolated_punch = usable_punches[0]
+        decisive_event = _decisive_isolated_lunch_event(isolated_punch, events_by_key, policy)
+        if decisive_event is not None and (isolated_punch.punch_id, decisive_event) in candidates:
+            for event_key in FLEXIBLE_EVENT_KEYS:
+                selected[event_key] = None
+            selected[decisive_event] = isolated_punch.punch_id
+            ambiguous_ids.discard(isolated_punch.punch_id)
+        selected_flexible_event = next(
+            (
+                event_key
+                for event_key in FLEXIBLE_EVENT_KEYS
+                if selected[event_key] == isolated_punch.punch_id
+            ),
+            None,
+        )
+        if selected_flexible_event is not None and selected_flexible_event == decisive_event:
+            ambiguous_ids.discard(isolated_punch.punch_id)
+        elif selected_flexible_event is not None:
+            ambiguous_ids.add(isolated_punch.punch_id)
 
     for event_key, punch_id in list(selected.items()):
         if punch_id in ambiguous_ids:

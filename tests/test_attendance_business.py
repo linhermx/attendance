@@ -306,6 +306,43 @@ class ContextualClassificationTests(unittest.TestCase):
             "Sin entrada | Sin regreso de comida | Sin salida final",
         )
 
+    def test_isolated_lunch_return_reference_punch_is_not_left_blank(self) -> None:
+        result = clasificar_checadas(
+            ["12:44:56"],
+            WEEKDAY_SHIFT,
+            estados=["Entrada"],
+            dispositivos=["CHECADOR_PRODUCCION"],
+        )
+        self.assertIsNone(result["entrada"])
+        self.assertIsNone(result["inicio_comida"])
+        self.assertEqual(result["fin_comida"], "12:44:56")
+        self.assertIsNone(result["salida"])
+        self.assertEqual(result["status"], "Incidencia")
+        self.assertEqual(
+            result["detalle"],
+            "Sin entrada | Sin inicio de comida | Sin salida final",
+        )
+        self.assertNotIn("Registro ambiguo", result["detalle"])
+        self.assertNotIn("Sin regreso de comida", result["detalle"])
+
+    def test_isolated_saturday_lunch_return_reference_punch_is_not_left_blank(self) -> None:
+        result = clasificar_checadas(
+            ["12:29:58"],
+            SATURDAY_SHIFT,
+            estados=["Entrada"],
+            dispositivos=["CHECADOR_PRODUCCION"],
+        )
+        self.assertIsNone(result["entrada"])
+        self.assertIsNone(result["inicio_comida"])
+        self.assertEqual(result["fin_comida"], "12:29:58")
+        self.assertIsNone(result["salida"])
+        self.assertEqual(result["status"], "Incidencia")
+        self.assertEqual(
+            result["detalle"],
+            "Sin entrada | Sin inicio de comida | Sin salida final",
+        )
+        self.assertNotIn("Registro ambiguo", result["detalle"])
+
     def test_late_entry_with_later_exit_has_no_false_lunch_excess(self) -> None:
         result = clasificar_checadas(
             ["11:00:00", "12:40:00", "17:10:00"],
