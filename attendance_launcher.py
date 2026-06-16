@@ -29,6 +29,7 @@ BUNDLED_RELEASE_META = "attendance_release.json"
 STATE_FILE_NAME = "launcher_state.json"
 CACHE_MAX_AGE_SECONDS = 30 * 60
 LATEST_TIMEOUT_SECONDS = 8
+STARTUP_LATEST_TIMEOUT_SECONDS = 4
 BACKGROUND_LATEST_TIMEOUT_SECONDS = 4
 DOWNLOAD_TIMEOUT_SECONDS = 60
 LAUNCHER_MUTEX_NAME = "Local\\LINHER.Attendance.Launcher"
@@ -511,6 +512,42 @@ def refresh_release_cache(cache_path: Path) -> None:
     )
 
 
+def resolve_latest_release(
+    cache_path: Path,
+    *,
+    timeout_seconds: int = LATEST_TIMEOUT_SECONDS,
+    allow_stale_cache_fallback: bool = True,
+) -> tuple[dict[str, object] | None, bool]:
+    cached_release = load_cached_release(cache_path)
+    if cache_is_fresh(cached_release):
+        return cached_release, False
+
+    try:
+        latest_version, latest_tag, asset_url, asset_name = get_latest_release(
+            timeout_seconds=timeout_seconds
+        )
+    except Exception:
+        if cached_release and allow_stale_cache_fallback:
+            return cached_release, False
+        raise
+
+    resolved_release = {
+        "version": latest_version,
+        "tag": latest_tag,
+        "url": asset_url,
+        "asset_name": asset_name,
+        "checked_at": time.time(),
+    }
+    save_cached_release(
+        cache_path,
+        version=latest_version,
+        tag=latest_tag,
+        url=asset_url,
+        asset_name=asset_name,
+    )
+    return resolved_release, True
+
+
 def locate_extracted_app_dir(extract_root: Path) -> Path:
     direct_exe = extract_root / APP_EXE_NAME
     if direct_exe.exists():
@@ -633,10 +670,30 @@ def main() -> None:
         if installed_exe:
             ui.set_status("Revisando instalación local...", f"Versión detectada: {format_version(installed_version)}.")
 
-            if cached_release and cached_release["version"] > installed_version:
-                latest_version = cached_release["version"]
-                latest_tag = str(cached_release["tag"])
-                asset_url = str(cached_release["url"])
+            release_info = cached_release
+            refreshed_live = False
+            if not cache_is_fresh(cached_release):
+                ui.set_status(
+                    "Verificando actualizaciones...",
+                    "Consultando la última versión publicada antes de abrir Attendance.",
+                )
+                try:
+                    release_info, refreshed_live = resolve_latest_release(
+                        cache_path,
+                        timeout_seconds=STARTUP_LATEST_TIMEOUT_SECONDS,
+                    )
+                except Exception:
+                    ui.set_status(
+                        "Verificando actualizaciones...",
+                        "No se pudo validar en este momento; se refrescará la información en segundo plano.",
+                    )
+                    spawn_background_refresh()
+                    run_app(installed_exe, ui)
+
+            if release_info and release_info["version"] > installed_version:
+                latest_version = release_info["version"]
+                latest_tag = str(release_info["tag"])
+                asset_url = str(release_info["url"])
                 message = (
                     f"Hay una versión disponible: {latest_tag}\n"
                     f"Instalada: {format_version(installed_version)}\n\n"
@@ -656,12 +713,11 @@ def main() -> None:
                             f"No se pudo actualizar:\n{exc}\n\nSe abrirá la versión instalada.",
                         )
 
-                if not cache_is_fresh(cached_release):
+                if release_info is cached_release and not cache_is_fresh(release_info):
                     spawn_background_refresh()
                 run_app(installed_exe, ui)
 
-            if not cache_is_fresh(cached_release):
-                ui.set_status("Verificando actualizaciones...", "Se refrescará la información en segundo plano.")
+            if release_info and release_info is cached_release and not cache_is_fresh(release_info) and not refreshed_live:
                 spawn_background_refresh()
             run_app(installed_exe, ui)
 
@@ -685,20 +741,13 @@ def main() -> None:
 
         try:
             ui.set_status("Verificando actualizaciones...", "Consultando la última versión publicada.")
-            if cached_release and cache_is_fresh(cached_release):
-                latest_version = cached_release["version"]
-                latest_tag = str(cached_release["tag"])
-                asset_url = str(cached_release["url"])
-                asset_name = str(cached_release["asset_name"])
-            else:
-                latest_version, latest_tag, asset_url, asset_name = get_latest_release()
-                save_cached_release(
-                    cache_path,
-                    version=latest_version,
-                    tag=latest_tag,
-                    url=asset_url,
-                    asset_name=asset_name,
-                )
+            release_info, _ = resolve_latest_release(cache_path)
+            if release_info is None:
+                raise RuntimeError("No se pudo resolver la última versión publicada.")
+            latest_version = release_info["version"]
+            latest_tag = str(release_info["tag"])
+            asset_url = str(release_info["url"])
+            asset_name = str(release_info["asset_name"])
         except Exception as exc:
             if installed_exe:
                 ui.show_warning(
