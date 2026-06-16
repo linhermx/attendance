@@ -368,6 +368,25 @@ class ContextualClassificationTests(unittest.TestCase):
         result = clasificar_checadas(["11:30:00"], WEEKDAY_SHIFT)
         self.assertEqual(result["status"], "Ambiguo")
         self.assertIn("Registro ambiguo", result["detalle"])
+        self.assertIn("Checada registrada sin clasificar (11:30:00)", result["detalle"])
+
+    def test_single_saturday_entry_hint_before_lunch_is_shown_as_late_entry(self) -> None:
+        result = clasificar_checadas(
+            ["10:38:03"],
+            SATURDAY_SHIFT,
+            estados=["Entrada"],
+            dispositivos=["CHECADOR_PRODUCCION"],
+        )
+        self.assertEqual(result["entrada"], "10:38:03")
+        self.assertIsNone(result["inicio_comida"])
+        self.assertIsNone(result["fin_comida"])
+        self.assertIsNone(result["salida"])
+        self.assertEqual(result["status"], "Retardo + incidencia")
+        self.assertEqual(
+            result["detalle"],
+            "Retardo grave (158 min) | Sin inicio de comida | Sin regreso de comida | Sin salida final",
+        )
+        self.assertNotIn("Registro ambiguo", result["detalle"])
 
     def test_late_entry_with_complete_lunch_without_final_exit_is_not_ambiguous(self) -> None:
         result = clasificar_checadas(
@@ -419,6 +438,32 @@ class ContextualClassificationTests(unittest.TestCase):
         self.assertEqual(result["inicio_comida"], "11:59:00")
         self.assertEqual(result["status"], "Incidencia")
         self.assertIn("Sin entrada", result["detalle"])
+
+    def test_operational_day_shows_single_saturday_entry_punch_in_entry_column(self) -> None:
+        work_date = date(2026, 6, 13)
+        personal = pd.DataFrame([{"id_usuario": "39", "nombre_completo": "PERSONA TREINTA Y NUEVE"}])
+        events = pd.DataFrame(
+            [
+                {
+                    "id_usuario": "39",
+                    "tiempo": pd.Timestamp(f"{work_date} 10:38:03"),
+                    "estado_normalizado": "Entrada",
+                    "dispositivo_normalizado": "CHECADOR_PRODUCCION",
+                }
+            ]
+        )
+        row = analyze_operational_day(
+            personal,
+            events,
+            work_date,
+            schedule_for_date(work_date, []),
+        ).iloc[0]
+        self.assertEqual(row["Entrada"], "10:38:03")
+        self.assertEqual(
+            row["Detalle"],
+            "Retardo grave (158 min) | Sin inicio de comida | Sin regreso de comida | Sin salida final",
+        )
+        self.assertEqual(row["Estatus"], "Retardo + incidencia")
 
 
 class DuplicatePunchNormalizationTests(unittest.TestCase):

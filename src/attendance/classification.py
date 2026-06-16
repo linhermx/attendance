@@ -487,6 +487,51 @@ def _decisive_isolated_lunch_event(
     return None
 
 
+def _hinted_isolated_rigid_event(
+    punch: Punch,
+    *,
+    events_by_key: Mapping[str, ExpectedEvent],
+    candidates: Mapping[tuple[int, str], CandidateScore],
+) -> str | None:
+    hint, strong_hint = _state_hint(punch.state, punch.device)
+    if hint not in RIGID_EVENT_KEYS:
+        return None
+    if _inside_protected_lunch_zone(punch, events_by_key):
+        return None
+
+    candidate = candidates.get((punch.punch_id, hint))
+    if candidate is None:
+        return None
+
+    if hint == "entry" and punch.checked_at >= events_by_key["lunch_out"].expected_at:
+        return None
+    if hint == "exit" and punch.checked_at <= events_by_key["lunch_return"].expected_at:
+        return None
+
+    punch_candidates = [
+        score
+        for (candidate_punch_id, _event_key), score in candidates.items()
+        if candidate_punch_id == punch.punch_id
+    ]
+    if not punch_candidates:
+        return None
+
+    top_candidate = max(punch_candidates, key=lambda item: item.score)
+    if top_candidate.event_key != hint:
+        return None
+
+    if strong_hint:
+        return hint
+
+    second_score = max(
+        (score.score for score in punch_candidates if score.event_key != hint),
+        default=float("-inf"),
+    )
+    if candidate.score > second_score:
+        return hint
+    return None
+
+
 def _has_strong_exit_hint(punch: Punch) -> bool:
     hint, strong_hint = _state_hint(punch.state, punch.device)
     return strong_hint and hint == "exit"
@@ -824,10 +869,21 @@ def classify_punches(
     if len(usable_punches) == 1:
         isolated_punch = usable_punches[0]
         decisive_event = _decisive_isolated_lunch_event(isolated_punch, events_by_key, policy)
+        hinted_rigid_event = _hinted_isolated_rigid_event(
+            isolated_punch,
+            events_by_key=events_by_key,
+            candidates=candidates,
+        )
         if decisive_event is not None and (isolated_punch.punch_id, decisive_event) in candidates:
             for event_key in FLEXIBLE_EVENT_KEYS:
                 selected[event_key] = None
             selected[decisive_event] = isolated_punch.punch_id
+            ambiguous_ids.discard(isolated_punch.punch_id)
+        elif hinted_rigid_event is not None and (isolated_punch.punch_id, hinted_rigid_event) in candidates:
+            for event_key in EVENT_KEYS:
+                if selected[event_key] == isolated_punch.punch_id:
+                    selected[event_key] = None
+            selected[hinted_rigid_event] = isolated_punch.punch_id
             ambiguous_ids.discard(isolated_punch.punch_id)
         selected_flexible_event = next(
             (

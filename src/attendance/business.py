@@ -114,6 +114,19 @@ def evaluate_business(
     if non_ambiguous_unused:
         incidents.append("Checada no reconocida")
 
+    unresolved_visible_punches = [
+        punch
+        for punch in classification.unused_punches
+        if all(punch != duplicate.duplicate for duplicate in classification.duplicate_punches)
+    ]
+    detail_annotations: list[str] = []
+    if unresolved_visible_punches and (ambiguous or bool(non_ambiguous_unused)):
+        registered_times = ", ".join(
+            punch.checked_at.strftime("%H:%M:%S")
+            for punch in sorted(unresolved_visible_punches, key=lambda item: item.checked_at)
+        )
+        detail_annotations.append(f"Checada registrada sin clasificar ({registered_times})")
+
     tardy_minutes = 0
     tardy_detail = ""
     if entry is not None and entry > expected["entry"]:
@@ -133,7 +146,7 @@ def evaluate_business(
     else:
         status = "Puntual"
 
-    detail_items = ([tardy_detail] if tardy_detail else []) + incidents
+    detail_items = ([tardy_detail] if tardy_detail else []) + incidents + detail_annotations
     return BusinessEvaluation(
         assignments=assignments,
         operational_incidents=incidents,
