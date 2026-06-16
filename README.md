@@ -17,6 +17,8 @@ Herramienta para analizar control de asistencia a partir de archivos exportados 
 - reportes Excel con detalle operativo y una hoja separada de auditoría técnica;
 - configuración de clasificación general, por turno y por empleado;
 - domingos tratados como días no laborables, con checadas conservadas únicamente para revisión;
+- el detalle operativo conserva la hora de una checada no clasificada cuando la evidencia sigue siendo ambigua o insuficiente;
+- el launcher de Windows verifica releases al inicio para detectar actualizaciones publicadas sin requerir una segunda apertura;
 - GUI de Windows y CLI.
 
 ## Reglas de clasificación
@@ -89,6 +91,8 @@ Los reportes principales incluyen:
 - `Auditoría clasificación`
 
 `Detalle`, `Detalle diario`, `Detalle consolidado` y las vistas de la GUI contienen únicamente información operativa. Scores, referencias horarias, alternativas, estado registrado por el checador, dispositivo de origen, checadas dominicales y razones de asignación se conservan exclusivamente en la hoja `Auditoría clasificación`.
+
+Si una checada real no alcanza evidencia suficiente para clasificarse, el detalle operativo muestra `Checada registrada sin clasificar (HH:MM:SS)` para no ocultar la hora capturada.
 
 La Vista rápida se construye únicamente con IDs y nombres presentes en la BBDD de personal cargada. Los archivos y carpetas de salida ubicados en testing, fixtures, mocks, demo, examples, evidence o casos no pueden utilizarse para un reporte operativo.
 

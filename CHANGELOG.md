@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.1.2] - 2026-06-16
+
+### Fixed
+
+- Classified isolated pre-lunch punches with explicit entry evidence as late entries when they are the strongest rigid-event candidate, instead of leaving the record blank and fully ambiguous.
+- Preserved the registered time in operational detail for punches that still cannot be classified with sufficient evidence.
+- Made the Windows launcher check the latest published release during startup when the cache is stale, so newly published updates can be detected on the first launch.
+
 ## [v2.1.1] - 2026-06-15
 
 ### Fixed
