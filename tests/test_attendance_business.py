@@ -260,11 +260,11 @@ class ContextualClassificationTests(unittest.TestCase):
         self.assertIn("estado=Salida a descanso", result["auditoria"])
         self.assertIn("dispositivo=CHECADOR_PRODUCCION", result["auditoria"])
 
-    def test_legacy_generic_production_states_still_follow_context(self) -> None:
+    def test_blank_states_still_follow_context(self) -> None:
         result = clasificar_checadas(
             ["08:00:00", "12:00:00", "12:45:00", "17:00:00"],
             WEEKDAY_SHIFT,
-            estados=["Entrada", "Entrada", "Entrada", "Salida"],
+            estados=["", "", "", ""],
             dispositivos=["CHECADOR_PRODUCCION"] * 4,
         )
         self.assertEqual(result["entrada"], "08:00:00")
@@ -274,11 +274,11 @@ class ContextualClassificationTests(unittest.TestCase):
         self.assertEqual(result["status"], "Puntual")
         self.assertEqual(result["detalle"], "")
 
-    def test_wrong_selected_state_near_lunch_is_corrected_by_context(self) -> None:
+    def test_invalid_states_fall_back_to_context(self) -> None:
         result = clasificar_checadas(
             ["08:00:00", "12:05:00", "12:45:00", "17:00:00"],
             WEEKDAY_SHIFT,
-            estados=["Entrada", "Salida", "Entrada", "Salida"],
+            estados=["Entrada", "Estado invalido", "Otro estado", "Salida"],
             dispositivos=["CHECADOR_PRODUCCION"] * 4,
         )
         self.assertEqual(result["entrada"], "08:00:00")
@@ -310,7 +310,7 @@ class ContextualClassificationTests(unittest.TestCase):
         result = clasificar_checadas(
             ["12:44:56"],
             WEEKDAY_SHIFT,
-            estados=["Entrada"],
+            estados=["Estado invalido"],
             dispositivos=["CHECADOR_PRODUCCION"],
         )
         self.assertIsNone(result["entrada"])
@@ -329,7 +329,7 @@ class ContextualClassificationTests(unittest.TestCase):
         result = clasificar_checadas(
             ["12:29:58"],
             SATURDAY_SHIFT,
-            estados=["Entrada"],
+            estados=["Estado invalido"],
             dispositivos=["CHECADOR_PRODUCCION"],
         )
         self.assertIsNone(result["entrada"])
@@ -401,6 +401,41 @@ class ContextualClassificationTests(unittest.TestCase):
         self.assertEqual(result["detalle"], "Retardo grave (239 min) | Sin salida final")
         self.assertNotIn("Sin entrada", result["detalle"])
         self.assertNotIn("Registro ambiguo", result["detalle"])
+
+    def test_declared_entry_and_exit_are_assigned_directly(self) -> None:
+        result = clasificar_checadas(
+            ["08:48:40", "14:25:55"],
+            WEEKDAY_SHIFT,
+            estados=["Entrada", "Salida"],
+            dispositivos=["CHECADOR_OFICINA", "CHECADOR_OFICINA"],
+        )
+        self.assertEqual(result["entrada"], "08:48:40")
+        self.assertIsNone(result["inicio_comida"])
+        self.assertIsNone(result["fin_comida"])
+        self.assertEqual(result["salida"], "14:25:55")
+        self.assertEqual(
+            result["detalle"],
+            "Retardo (48 min) | Sin inicio de comida | Sin regreso de comida | Salida anticipada (154 min)",
+        )
+        self.assertNotIn("Registro ambiguo", result["detalle"])
+        self.assertNotIn("Checada registrada sin clasificar", result["detalle"])
+
+    def test_declared_entry_and_exit_still_calculate_worked_hours_without_lunch_pair(self) -> None:
+        work_date = date(2026, 6, 5)
+        events = pd.DataFrame(
+            [
+                {"id_usuario": "1", "tiempo": pd.Timestamp(f"{work_date} 08:00:30"), "estado": "Entrada"},
+                {"id_usuario": "1", "tiempo": pd.Timestamp(f"{work_date} 17:00:00"), "estado": "Salida"},
+            ]
+        )
+        row = analyze_operational_day(
+            prepared_personal().iloc[[0]].copy(),
+            events,
+            work_date,
+            schedule_for_date(work_date, []),
+        ).iloc[0]
+        self.assertEqual(row["Horas trabajadas"], "09:00")
+        self.assertEqual(row["Detalle"], "Sin inicio de comida | Sin regreso de comida")
 
     def test_operational_detail_does_not_show_state_or_device_audit_context(self) -> None:
         work_date = date(2026, 6, 5)
@@ -574,15 +609,44 @@ class OperationalEvaluationTests(unittest.TestCase):
         self.assertEqual(row["Estatus"], "Puntual")
         self.assertEqual(row["Detalle"], "")
 
-    def test_worked_hours_require_complete_real_sequence(self) -> None:
+    def test_worked_hours_require_entry_and_exit_and_reject_incomplete_lunch(self) -> None:
+        scheduled_entry = datetime(2026, 6, 5, 8, 0)
         entry = datetime(2026, 6, 5, 8, 0)
         lunch_out = datetime(2026, 6, 5, 12, 0)
         lunch_return = datetime(2026, 6, 5, 12, 45)
         exit_time = datetime(2026, 6, 5, 17, 0)
-        self.assertIsNone(calculate_worked_minutes(entry, lunch_out, None, exit_time))
         self.assertEqual(
-            calculate_worked_minutes(entry, lunch_out, lunch_return, exit_time),
+            calculate_worked_minutes(entry, None, None, exit_time, scheduled_entry=scheduled_entry),
+            540,
+        )
+        self.assertIsNone(calculate_worked_minutes(entry, lunch_out, None, exit_time, scheduled_entry=scheduled_entry))
+        self.assertIsNone(calculate_worked_minutes(entry, None, lunch_return, exit_time, scheduled_entry=scheduled_entry))
+        self.assertEqual(
+            calculate_worked_minutes(entry, lunch_out, lunch_return, exit_time, scheduled_entry=scheduled_entry),
             495,
+        )
+
+    def test_worked_hours_use_scheduled_entry_until_08_00_59(self) -> None:
+        scheduled_entry = datetime(2026, 6, 5, 8, 0)
+        self.assertEqual(
+            calculate_worked_minutes(
+                datetime(2026, 6, 5, 8, 0, 59),
+                None,
+                None,
+                datetime(2026, 6, 5, 17, 0),
+                scheduled_entry=scheduled_entry,
+            ),
+            540,
+        )
+        self.assertEqual(
+            calculate_worked_minutes(
+                datetime(2026, 6, 5, 8, 1, 0),
+                None,
+                None,
+                datetime(2026, 6, 5, 17, 0),
+                scheduled_entry=scheduled_entry,
+            ),
+            539,
         )
 
     def test_isolated_lunch_time_punch_has_no_worked_hours(self) -> None:
