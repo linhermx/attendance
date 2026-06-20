@@ -8,7 +8,7 @@ La lógica se divide en dos capas.
 
 `ClassificationResult` contiene asignaciones, scores, alternativas, confianza, referencias utilizadas, checadas ambiguas o no utilizadas, flags técnicos y razones auditables. Esta capa no produce incidencias operativas.
 
-El clasificador recibe la hora de la checada, el estado registrado por el checador y el dispositivo de origen. El estado ayuda a interpretar la intención de la checada, pero se valida contra horario, secuencia y duración real para evitar que una selección incorrecta fuerce una clasificación operativa incorrecta.
+El clasificador recibe la hora de la checada, el estado registrado por el checador y el dispositivo de origen. Cuando el estado registrado coincide con el catálogo operativo válido, se toma como fuente primaria de clasificación. Cuando falta o no es válido, el sistema usa horario, secuencia, duración real, duplicados cercanos y zona protegida de comida como fallback contextual.
 
 ### Evaluación de negocio
 
@@ -28,7 +28,7 @@ Una checada aislada dentro del bloque flexible de comida no se deja en blanco si
 
 ## Estado y dispositivo del checador
 
-Los estados explícitos del checador se usan como señales fuertes:
+Los estados válidos del checador se usan como fuente primaria:
 
 | Estado registrado | Evento sugerido |
 | --- | --- |
@@ -37,9 +37,9 @@ Los estados explícitos del checador se usan como señales fuertes:
 | `Regreso descanso` | regreso de comida |
 | `Salida` | salida final |
 
-Las marcas explícitas de comida tienen más peso que una referencia horaria débil, pero no vuelven rígida la comida. Los estados genéricos o seleccionados por error se contrastan con el dispositivo, el horario, la secuencia del día y la duración real de comida.
+Las marcas explícitas de comida no vuelven rígida la comida; solamente identifican el tipo de evento que el trabajador seleccionó. La duración máxima de comida sigue siendo la regla operativa.
 
-Si el estado registrado contradice claramente una secuencia coherente, el clasificador puede asignar el evento más probable y conservar la diferencia en la auditoría técnica. El campo operativo `Detalle` no muestra esta información técnica.
+Si el estado registrado no pertenece al catálogo válido, el clasificador vuelve al análisis contextual y conserva la evidencia en la auditoría técnica. El campo operativo `Detalle` no muestra esta información técnica.
 
 ## Eventos flexibles
 
@@ -113,7 +113,11 @@ En modo rango, el domingo no cuenta como día laboral. Solo se incorpora al deta
 
 ## Horas trabajadas
 
-Solo se calculan con entrada, inicio de comida, regreso de comida y salida reales en secuencia cronológica válida. Nunca se sustituyen ni inventan checadas.
+Se calculan cuando existe una entrada real y una salida real en orden cronológico válido.
+
+Si también existe el par completo de comida, se descuenta la duración real entre inicio y regreso de comida. Si no existe comida registrada, el tiempo trabajado se calcula como salida menos entrada. Si la comida está incompleta o la secuencia es inválida, el campo queda vacío.
+
+Para el cálculo exclusivamente, una entrada registrada hasta `08:00:59` se considera como `08:00:00`. Desde `08:01:00` se usa la hora real registrada. Nunca se sustituyen ni inventan checadas faltantes.
 
 ## Catálogo operativo
 

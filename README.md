@@ -10,10 +10,11 @@ Herramienta para analizar control de asistencia a partir de archivos exportados 
 
 - análisis diario y por rango;
 - clasificación contextual de entrada, inicio de comida, regreso de comida y salida;
-- uso de estado registrado por el checador y dispositivo de origen como señales auditables de clasificación;
+- uso del estado registrado por el checador como fuente primaria cuando identifica `Entrada`, `Salida a descanso`, `Regreso descanso` o `Salida`;
+- fallback contextual por horario, secuencia y duración cuando el estado falta o no es válido;
 - normalización de checadas duplicadas cercanas antes de clasificar eventos;
 - detección de retardos, faltas, omisiones, registros ambiguos y salidas anticipadas;
-- cálculo de horas trabajadas únicamente con cuatro checadas reales, completas y ordenadas;
+- cálculo de horas trabajadas con secuencia real de entrada y salida, descontando comida solo cuando existe el par completo;
 - reportes Excel con detalle operativo y una hoja separada de auditoría técnica;
 - configuración de clasificación general, por turno y por empleado;
 - domingos tratados como días no laborables, con checadas conservadas únicamente para revisión;
@@ -27,8 +28,8 @@ Herramienta para analizar control de asistencia a partir de archivos exportados 
 - Inicio y regreso de comida son eventos flexibles.
 - La hora programada de comida se usa solamente como referencia débil para clasificación.
 - Una pareja cronológica coherente puede clasificarse como comida aunque ocurra después de la referencia.
-- El estado registrado por el checador se usa como señal fuerte cuando identifica explícitamente entrada, salida a descanso, regreso de descanso o salida.
-- Los estados genéricos `Entrada` y `Salida` se validan contra horario, secuencia y duración para evitar clasificaciones incorrectas.
+- El estado registrado por el checador se toma como fuente primaria cuando coincide exactamente con `Entrada`, `Salida a descanso`, `Regreso descanso` o `Salida`.
+- Si el estado falta o no es válido, el clasificador usa horario, secuencia, duración de comida, duplicados cercanos y zona protegida de comida como fallback contextual.
 - Si existen cuatro checadas utilizables, la secuencia entrada-comida-regreso-salida refuerza la hipótesis, pero no sustituye las reglas de contexto.
 - La primera checada del día no se considera entrada automáticamente.
 - La primera checada anterior a la referencia de comida se prioriza como entrada tardía cuando existe una salida final posterior plausible.
@@ -56,9 +57,11 @@ Herramienta para analizar control de asistencia a partir de archivos exportados 
 
 ### Horas trabajadas
 
-- Requieren entrada, inicio de comida, regreso de comida y salida reales.
-- Las cuatro checadas deben tener orden cronológico válido.
-- Si falta cualquier evento, el campo queda vacío.
+- Requieren entrada y salida reales en orden cronológico válido.
+- Si existe comida completa, se descuenta el tiempo real entre `Salida a descanso` y `Regreso descanso`.
+- Si no existe comida registrada, se calcula como salida menos entrada.
+- Si la comida queda incompleta o la secuencia es inválida, el campo queda vacío.
+- Para cálculo exclusivamente, una entrada registrada hasta `08:00:59` se toma como `08:00:00`; después de ese segundo se usa la hora real registrada.
 
 ### Domingo
 

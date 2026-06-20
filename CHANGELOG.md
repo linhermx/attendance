@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.2.0] - 2026-06-20
+
+### Changed
+
+- Treat valid punch states (`Entrada`, `Salida a descanso`, `Regreso descanso`, `Salida`) as the primary classification source before contextual fallback.
+- Keep contextual classification for punches with missing or invalid states, using schedule, sequence, lunch duration, duplicate normalization, and protected lunch zones.
+- Calculate worked hours with real entry and exit punches, deducting lunch only when both lunch punches are present.
+- Use the scheduled entry time for worked-hours calculation when the real entry is registered at or before `08:00:59`; later entries use the real registered time.
+
+### Fixed
+
+- Prevented valid declared exit punches from being left unclassified in early-exit scenarios.
+- Prevented incomplete lunch or invalid sequences from producing worked hours.
+
 ## [v2.1.2] - 2026-06-16
 
 ### Fixed
