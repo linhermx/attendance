@@ -395,6 +395,9 @@ def calculate_worked_minutes(
     lunch_out_real: datetime | None,
     lunch_return_real: datetime | None,
     exit_real: datetime | None,
+    *,
+    scheduled_entry: datetime | None = None,
+    entry_grace_seconds: int = 59,
 ) -> int | None:
     return calculate_business_worked_minutes(
         {
@@ -402,7 +405,9 @@ def calculate_worked_minutes(
             "lunch_out": lunch_out_real,
             "lunch_return": lunch_return_real,
             "exit": exit_real,
-        }
+        },
+        scheduled_entry=scheduled_entry,
+        entry_grace_seconds=entry_grace_seconds,
     )
 
 
@@ -691,7 +696,7 @@ def analyze_operational_day(
                 punch_id=position,
                 checked_at=row["tiempo"],
                 state=str(row.get("estado", row.get("estado_normalizado", ""))),
-                device=str(row.get("dispositivo", "")),
+                device=str(row.get("dispositivo", row.get("dispositivo_normalizado", ""))),
             )
             for position, (_, row) in enumerate(employee_events.iterrows())
         ]

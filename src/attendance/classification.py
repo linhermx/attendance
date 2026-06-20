@@ -9,6 +9,8 @@ import re
 from typing import Mapping, Sequence
 import unicodedata
 
+from .declared_state import map_declared_state
+
 
 EVENT_KEYS = ("entry", "lunch_out", "lunch_return", "exit")
 RIGID_EVENT_KEYS = ("entry", "exit")
@@ -354,6 +356,97 @@ def _state_hint(state: str, device: str = "") -> tuple[str | None, bool]:
     return None, False
 
 
+
+def _all_punches_have_declared_state(punches: Sequence[Punch]) -> bool:
+    return bool(punches) and all(map_declared_state(punch.state) is not None for punch in punches)
+
+
+def _declared_candidate_score(punch: Punch, event: ExpectedEvent) -> CandidateScore:
+    signed_distance = (punch.checked_at - event.expected_at).total_seconds() / 60
+    strict_limit = event.window.before_minutes if signed_distance < 0 else event.window.after_minutes
+    return CandidateScore(
+        punch_id=punch.punch_id,
+        event_key=event.key,
+        score=135.0 if event.key in RIGID_EVENT_KEYS else 130.0,
+        signed_distance_minutes=signed_distance,
+        inside_window=abs(signed_distance) <= strict_limit,
+        state_match=True,
+        state_conflict=False,
+        basis="estado declarado",
+    )
+
+
+def _can_assign_declared_event(
+    event_key: str,
+    assignments: Mapping[str, Punch | None],
+) -> bool:
+    if event_key == "entry":
+        return all(assignments[key] is None for key in EVENT_KEYS)
+    if event_key == "lunch_out":
+        return assignments["lunch_out"] is None and assignments["lunch_return"] is None and assignments["exit"] is None
+    if event_key == "lunch_return":
+        return assignments["lunch_return"] is None and assignments["exit"] is None
+    if event_key == "exit":
+        return assignments["exit"] is None
+    return False
+
+
+def _is_declared_order_violation(
+    event_key: str,
+    assignments: Mapping[str, Punch | None],
+) -> bool:
+    if event_key == "entry":
+        return any(assignments[key] is not None for key in ("lunch_out", "lunch_return", "exit"))
+    if event_key == "lunch_out":
+        return assignments["lunch_return"] is not None or assignments["exit"] is not None
+    if event_key == "lunch_return":
+        return assignments["exit"] is not None
+    return False
+
+
+def _classify_declared_state_punches(
+    punches: Sequence[Punch],
+    expected_events: Sequence[ExpectedEvent],
+) -> ClassificationResult:
+    events_by_key = {event.key: event for event in expected_events}
+    assignments: dict[str, Punch | None] = {event_key: None for event_key in EVENT_KEYS}
+    candidates: dict[tuple[int, str], CandidateScore] = {}
+    confidence: dict[int, CandidateScore] = {}
+    unused_punches: list[Punch] = []
+    technical_flags = ["Modo declarativo por estado"]
+    sequence_invalid = False
+
+    for punch in punches:
+        event_key = map_declared_state(punch.state)
+        if event_key is None:
+            unused_punches.append(punch)
+            continue
+        candidate = _declared_candidate_score(punch, events_by_key[event_key])
+        candidates[(punch.punch_id, event_key)] = candidate
+        if _can_assign_declared_event(event_key, assignments):
+            assignments[event_key] = punch
+            confidence[punch.punch_id] = candidate
+            continue
+        if _is_declared_order_violation(event_key, assignments):
+            sequence_invalid = True
+        unused_punches.append(punch)
+
+    if sequence_invalid:
+        technical_flags.append("Secuencia inválida declarada")
+    if unused_punches:
+        technical_flags.append("Checada no utilizada por el clasificador")
+
+    return ClassificationResult(
+        assignments=assignments,
+        candidates=candidates,
+        confidence=confidence,
+        unused_punches=unused_punches,
+        ambiguous_punches=[],
+        duplicate_punches=[],
+        technical_flags=technical_flags,
+        hypothesis_score=round(sum(candidate.score for candidate in confidence.values()), 3),
+        alternative_score=None,
+    )
 def _rigid_candidate_score(punch: Punch, event: ExpectedEvent) -> CandidateScore | None:
     signed_distance = (punch.checked_at - event.expected_at).total_seconds() / 60
     distance = abs(signed_distance)
@@ -405,7 +498,7 @@ def _contextual_late_entry_candidate(punch: Punch, event: ExpectedEvent) -> Cand
         False,
         state_match,
         state_conflict,
-        "entrada tardía contextual",
+        "entrada tardia contextual",
     )
 
 
@@ -825,6 +918,24 @@ def classify_punches(
     usable_punches = normalized.usable_punches
     usable_punches_by_id = {punch.punch_id: punch for punch in usable_punches}
 
+    if _all_punches_have_declared_state(usable_punches):
+        declared_result = _classify_declared_state_punches(
+            usable_punches,
+            [events_by_key[key] for key in EVENT_KEYS],
+        )
+        return ClassificationResult(
+            assignments=declared_result.assignments,
+            candidates=declared_result.candidates,
+            confidence=declared_result.confidence,
+            unused_punches=declared_result.unused_punches + [duplicate.duplicate for duplicate in normalized.duplicate_punches],
+            ambiguous_punches=declared_result.ambiguous_punches,
+            duplicate_punches=normalized.duplicate_punches,
+            technical_flags=declared_result.technical_flags
+            + (["Checada duplicada omitida por normalizacion"] if normalized.duplicate_punches else []),
+            hypothesis_score=declared_result.hypothesis_score,
+            alternative_score=declared_result.alternative_score,
+        )
+
     hypotheses, candidates = _build_hypotheses(
         usable_punches,
         [events_by_key[key] for key in EVENT_KEYS],
@@ -848,7 +959,7 @@ def classify_punches(
     contextual_entry = selected["entry"]
     contextual_entry_selected = (
         contextual_entry is not None
-        and candidates[(contextual_entry, "entry")].basis == "entrada tardía contextual"
+        and candidates[(contextual_entry, "entry")].basis == "entrada tardia contextual"
     )
     if contextual_entry_selected and selected["exit"] is not None:
         intermediate_punches = [
@@ -935,7 +1046,7 @@ def classify_punches(
     if assignments["entry"] is None and selected_lunch_out is not None:
         lunch_candidate = confidence[selected_lunch_out.punch_id]
         if abs(lunch_candidate.signed_distance_minutes) > policy.isolated_lunch_decisive_minutes:
-            technical_flags.append("Posible entrada tardía")
+            technical_flags.append("Posible entrada tardia")
 
     return ClassificationResult(
         assignments=assignments,
@@ -960,26 +1071,31 @@ def _assignment_reason(
     expected_events: Sequence[ExpectedEvent],
 ) -> str:
     distance = abs(candidate.signed_distance_minutes)
-    if candidate.event_key in FLEXIBLE_EVENT_KEYS:
+    if candidate.basis == "estado declarado":
         reason = (
-            f"Asignada como {EVENT_LABELS[candidate.event_key]} por contexto cronológico flexible; "
-            f"la referencia teórica está a {distance:.1f} min y solo actuó como desempate débil."
+            f"Asignada como {EVENT_LABELS[candidate.event_key]} segun el estado declarado en el reporte; "
+            "ese tipo de checada se toma como fuente primaria y la hora solo se usa para auditoria y validaciones de negocio."
         )
-    elif candidate.basis == "entrada tardía contextual":
+    elif candidate.event_key in FLEXIBLE_EVENT_KEYS:
         reason = (
-            "Asignada como entrada tardía contextual porque es la primera checada anterior "
+            f"Asignada como {EVENT_LABELS[candidate.event_key]} por contexto cronologico flexible; "
+            f"la referencia teorica esta a {distance:.1f} min y solo actuo como desempate debil."
+        )
+    elif candidate.basis == "entrada tardia contextual":
+        reason = (
+            "Asignada como entrada tardia contextual porque es la primera checada anterior "
             "a la referencia de comida y existe evidencia posterior compatible con jornada iniciada."
         )
     else:
-        position = "dentro" if candidate.inside_window else "en la extensión"
+        position = "dentro" if candidate.inside_window else "en la extension"
         reason = (
-            f"Asignada como {EVENT_LABELS[candidate.event_key]} por cercanía a la ventana rígida; "
-            f"está {position} y a {distance:.1f} min de la hora objetivo."
+            f"Asignada como {EVENT_LABELS[candidate.event_key]} por cercania a la ventana rigida; "
+            f"esta {position} y a {distance:.1f} min de la hora objetivo."
         )
     if candidate.event_key == "lunch_out":
         entry = next(event for event in expected_events if event.key == "entry")
         entry_distance = abs((punch.checked_at - entry.expected_at).total_seconds() / 60)
-        reason += f" Está a {entry_distance:.1f} min de la entrada esperada."
+        reason += f" Esta a {entry_distance:.1f} min de la entrada esperada."
     if candidate.state_match:
         reason += " El tipo registrado por el checador coincide."
     return reason

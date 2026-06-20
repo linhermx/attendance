@@ -6,12 +6,14 @@ import math
 from typing import Mapping, Sequence
 
 from .classification import ClassificationResult, EVENT_KEYS, ExpectedEvent
+from .time_calculation import calculate_worked_time
 
 
 @dataclass(frozen=True)
 class BusinessPolicy:
     maximum_lunch_seconds: int = 45 * 60
     severe_tardy_minutes: int = 60
+    entry_grace_seconds: int = 59
 
 
 @dataclass
@@ -27,18 +29,17 @@ class BusinessEvaluation:
     worked_minutes: int | None
 
 
-def calculate_worked_minutes(assignments: Mapping[str, datetime | None]) -> int | None:
-    entry = assignments.get("entry")
-    lunch_out = assignments.get("lunch_out")
-    lunch_return = assignments.get("lunch_return")
-    exit_time = assignments.get("exit")
-    if not all((entry, lunch_out, lunch_return, exit_time)):
-        return None
-    assert entry is not None and lunch_out is not None and lunch_return is not None and exit_time is not None
-    if not entry < lunch_out < lunch_return < exit_time:
-        return None
-    worked_seconds = (exit_time - entry).total_seconds() - (lunch_return - lunch_out).total_seconds()
-    return max(0, int(worked_seconds // 60))
+def calculate_worked_minutes(
+    assignments: Mapping[str, datetime | None],
+    *,
+    scheduled_entry: datetime | None = None,
+    entry_grace_seconds: int = 59,
+) -> int | None:
+    return calculate_worked_time(
+        assignments,
+        scheduled_entry=scheduled_entry,
+        entry_grace_seconds=entry_grace_seconds,
+    ).worked_minutes
 
 
 def evaluate_business(
@@ -62,6 +63,7 @@ def evaluate_business(
     exit_time = assignments["exit"]
     finalized = cutoff_time is None or cutoff_time >= expected["exit"] or exit_time is not None
     partial_meal_ambiguous = "Comida parcial ambigua" in classification.technical_flags
+    declared_state_mode = "Modo declarativo por estado" in classification.technical_flags
 
     incidents: list[str] = []
     if entry is None and (finalized or any((lunch_out, lunch_return, exit_time))):
@@ -78,7 +80,12 @@ def evaluate_business(
         incidents.append("Sin salida final")
 
     assigned_times = [assignments[key] for key in EVENT_KEYS if assignments[key] is not None]
-    if any(left >= right for left, right in zip(assigned_times, assigned_times[1:])):
+    sequence_invalid = any(left >= right for left, right in zip(assigned_times, assigned_times[1:]))
+    if lunch_return is not None and lunch_out is None and (entry is not None or exit_time is not None):
+        sequence_invalid = True
+    if any("Secuencia inv" in flag for flag in classification.technical_flags):
+        sequence_invalid = True
+    if sequence_invalid:
         incidents.append("Secuencia inválida")
 
     lunch_duration_seconds: int | None = None
@@ -111,7 +118,7 @@ def evaluate_business(
         if punch not in classification.ambiguous_punches
         and all(punch != duplicate.duplicate for duplicate in classification.duplicate_punches)
     ]
-    if non_ambiguous_unused:
+    if non_ambiguous_unused and not declared_state_mode:
         incidents.append("Checada no reconocida")
 
     unresolved_visible_punches = [
@@ -146,6 +153,12 @@ def evaluate_business(
     else:
         status = "Puntual"
 
+    worked_time = calculate_worked_time(
+        assignments,
+        scheduled_entry=expected["entry"],
+        entry_grace_seconds=policy.entry_grace_seconds,
+    )
+
     detail_items = ([tardy_detail] if tardy_detail else []) + incidents + detail_annotations
     return BusinessEvaluation(
         assignments=assignments,
@@ -156,5 +169,5 @@ def evaluate_business(
         lunch_duration_seconds=lunch_duration_seconds,
         lunch_minutes=lunch_minutes,
         early_leave_minutes=early_leave_minutes,
-        worked_minutes=calculate_worked_minutes(assignments),
+        worked_minutes=worked_time.worked_minutes,
     )
