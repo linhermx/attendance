@@ -39,6 +39,8 @@ Los estados válidos del checador se usan como fuente primaria:
 
 Las marcas explícitas de comida no vuelven rígida la comida; solamente identifican el tipo de evento que el trabajador seleccionó. La duración máxima de comida sigue siendo la regla operativa.
 
+Aunque el estado declarado sea válido, se valida contra la secuencia completa del día. Si una marca de comida deja sin clasificar una salida final clara, el clasificador puede corregirla por contexto y conservar la diferencia solamente en auditoría técnica.
+
 Si el estado registrado no pertenece al catálogo válido, el clasificador vuelve al análisis contextual y conserva la evidencia en la auditoría técnica. El campo operativo `Detalle` no muestra esta información técnica.
 
 ## Eventos flexibles

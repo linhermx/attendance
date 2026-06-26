@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.2.1] - 2026-06-26
+
+### Changed
+
+- Validate declared punch states against the full daily sequence before accepting meal-return punches that would leave a clear final exit unclassified.
+
+### Fixed
+
+- Recovered contextually evident final-exit punches when the selected punch state conflicts with an otherwise coherent attendance sequence.
+- Kept the source punch-state mismatch in technical audit without adding unclassified-punch details to the operational report.
+
 ## [v2.2.0] - 2026-06-20
 
 ### Changed

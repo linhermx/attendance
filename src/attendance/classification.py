@@ -18,6 +18,8 @@ FLEXIBLE_EVENT_KEYS = ("lunch_out", "lunch_return")
 PROTECTED_LUNCH_BEFORE_MINUTES = 15
 PROTECTED_LUNCH_AFTER_MINUTES = 15
 DUPLICATE_PUNCH_SECONDS = 5 * 60
+DECLARED_EARLY_EXIT_RESCUE_MIN_SCORE = 40.0
+DECLARED_LUNCH_EXIT_RESCUE_EXTRA_SECONDS = 60 * 60
 EVENT_LABELS = {
     "entry": "entrada",
     "lunch_out": "inicio de comida",
@@ -404,9 +406,207 @@ def _is_declared_order_violation(
     return False
 
 
+def _event_order_allows(
+    event_key: str,
+    punch: Punch,
+    assignments: Mapping[str, Punch | None],
+) -> bool:
+    event_index = EVENT_KEYS.index(event_key)
+    for previous_key in EVENT_KEYS[:event_index]:
+        previous = assignments[previous_key]
+        if previous is not None and previous.checked_at >= punch.checked_at:
+            return False
+    for next_key in EVENT_KEYS[event_index + 1 :]:
+        next_punch = assignments[next_key]
+        if next_punch is not None and next_punch.checked_at <= punch.checked_at:
+            return False
+    return True
+
+
+def _contextual_rescue_candidate(
+    punch: Punch,
+    event: ExpectedEvent,
+    *,
+    events_by_key: Mapping[str, ExpectedEvent],
+    assignments: Mapping[str, Punch | None],
+    policy: ClassificationPolicy,
+) -> CandidateScore | None:
+    if assignments[event.key] is not None or not _event_order_allows(event.key, punch, assignments):
+        return None
+
+    if event.key == "exit":
+        if _inside_protected_lunch_zone(punch, events_by_key) and not _has_strong_exit_hint(punch):
+            return None
+        candidate = _rigid_candidate_score(punch, event)
+    elif event.key == "entry":
+        if punch.checked_at >= events_by_key["lunch_out"].expected_at:
+            return None
+        candidate = _rigid_candidate_score(punch, event)
+        if candidate is None and any(assignments[key] is not None for key in ("lunch_out", "lunch_return", "exit")):
+            candidate = _contextual_late_entry_candidate(punch, event)
+    else:
+        hint, strong_hint = _state_hint(punch.state, punch.device)
+        if not _inside_protected_lunch_zone(punch, events_by_key) and not (strong_hint and hint == event.key):
+            return None
+        candidate = _flexible_candidate_score(punch, event)
+
+    if candidate is None or candidate.score < policy.minimum_score:
+        return None
+
+    declared_event = map_declared_state(punch.state)
+    return CandidateScore(
+        punch_id=candidate.punch_id,
+        event_key=candidate.event_key,
+        score=candidate.score,
+        signed_distance_minutes=candidate.signed_distance_minutes,
+        inside_window=candidate.inside_window,
+        state_match=declared_event == event.key,
+        state_conflict=declared_event is not None and declared_event != event.key,
+        basis="rescate contextual por estado incoherente",
+    )
+
+
+def _rescue_declared_state_punches(
+    *,
+    assignments: dict[str, Punch | None],
+    unused_punches: list[Punch],
+    candidates: dict[tuple[int, str], CandidateScore],
+    confidence: dict[int, CandidateScore],
+    events_by_key: Mapping[str, ExpectedEvent],
+    policy: ClassificationPolicy,
+) -> list[Punch]:
+    remaining_unused: list[Punch] = []
+    for punch in unused_punches:
+        rescue_candidates = [
+            candidate
+            for event_key in EVENT_KEYS
+            if (
+                candidate := _contextual_rescue_candidate(
+                    punch,
+                    events_by_key[event_key],
+                    events_by_key=events_by_key,
+                    assignments=assignments,
+                    policy=policy,
+                )
+            )
+            is not None
+        ]
+        rescue_candidates.sort(key=lambda item: item.score, reverse=True)
+        if not rescue_candidates:
+            remaining_unused.append(punch)
+            continue
+
+        selected = rescue_candidates[0]
+        second = rescue_candidates[1] if len(rescue_candidates) > 1 else None
+        if second is not None and selected.score - second.score < policy.ambiguity_margin:
+            remaining_unused.append(punch)
+            continue
+
+        assignments[selected.event_key] = punch
+        candidates[(punch.punch_id, selected.event_key)] = selected
+        confidence[punch.punch_id] = selected
+
+    return remaining_unused
+
+
+def _reference_lunch_seconds(events_by_key: Mapping[str, ExpectedEvent]) -> int:
+    return int(
+        (
+            events_by_key["lunch_return"].expected_at
+            - events_by_key["lunch_out"].expected_at
+        ).total_seconds()
+    )
+
+
+def _clear_declared_exit_rescue_candidate(
+    candidate: CandidateScore,
+    policy: ClassificationPolicy,
+) -> bool:
+    if candidate.signed_distance_minutes >= 0:
+        return candidate.score >= policy.minimum_score
+    return candidate.score >= max(policy.minimum_score, DECLARED_EARLY_EXIT_RESCUE_MIN_SCORE)
+
+
+def _declared_flexible_punch_exit_rescue_candidate(
+    event_key: str,
+    *,
+    assignments: Mapping[str, Punch | None],
+    events_by_key: Mapping[str, ExpectedEvent],
+    policy: ClassificationPolicy,
+) -> CandidateScore | None:
+    if assignments["exit"] is not None:
+        return None
+    punch = assignments[event_key]
+    if punch is None or map_declared_state(punch.state) not in FLEXIBLE_EVENT_KEYS:
+        return None
+
+    reference_seconds = _reference_lunch_seconds(events_by_key)
+    if reference_seconds <= 0:
+        return None
+
+    if event_key == "lunch_return":
+        lunch_out = assignments["lunch_out"]
+        if lunch_out is None:
+            earliest_exit_rescue = events_by_key["lunch_return"].expected_at + timedelta(
+                seconds=reference_seconds
+            )
+            if punch.checked_at < earliest_exit_rescue:
+                return None
+        else:
+            lunch_duration_seconds = int((punch.checked_at - lunch_out.checked_at).total_seconds())
+            if lunch_duration_seconds <= reference_seconds + DECLARED_LUNCH_EXIT_RESCUE_EXTRA_SECONDS:
+                return None
+    elif event_key == "lunch_out":
+        if punch.checked_at < events_by_key["exit"].expected_at:
+            return None
+
+    tentative_assignments = dict(assignments)
+    tentative_assignments[event_key] = None
+    candidate = _contextual_rescue_candidate(
+        punch,
+        events_by_key["exit"],
+        events_by_key=events_by_key,
+        assignments=tentative_assignments,
+        policy=policy,
+    )
+    if candidate is None or not _clear_declared_exit_rescue_candidate(candidate, policy):
+        return None
+    return candidate
+
+
+def _rescue_declared_final_exit_from_flexible_state(
+    *,
+    assignments: dict[str, Punch | None],
+    candidates: dict[tuple[int, str], CandidateScore],
+    confidence: dict[int, CandidateScore],
+    events_by_key: Mapping[str, ExpectedEvent],
+    policy: ClassificationPolicy,
+) -> bool:
+    for event_key in ("lunch_return", "lunch_out"):
+        candidate = _declared_flexible_punch_exit_rescue_candidate(
+            event_key,
+            assignments=assignments,
+            events_by_key=events_by_key,
+            policy=policy,
+        )
+        if candidate is None:
+            continue
+
+        punch = assignments[event_key]
+        if punch is None:
+            continue
+        assignments[event_key] = None
+        assignments["exit"] = punch
+        candidates[(punch.punch_id, "exit")] = candidate
+        confidence[punch.punch_id] = candidate
+        return True
+    return False
+
+
 def _classify_declared_state_punches(
     punches: Sequence[Punch],
     expected_events: Sequence[ExpectedEvent],
+    policy: ClassificationPolicy,
 ) -> ClassificationResult:
     events_by_key = {event.key: event for event in expected_events}
     assignments: dict[str, Punch | None] = {event_key: None for event_key in EVENT_KEYS}
@@ -414,7 +614,7 @@ def _classify_declared_state_punches(
     confidence: dict[int, CandidateScore] = {}
     unused_punches: list[Punch] = []
     technical_flags = ["Modo declarativo por estado"]
-    sequence_invalid = False
+    order_violation_ids: set[int] = set()
 
     for punch in punches:
         event_key = map_declared_state(punch.state)
@@ -428,10 +628,31 @@ def _classify_declared_state_punches(
             confidence[punch.punch_id] = candidate
             continue
         if _is_declared_order_violation(event_key, assignments):
-            sequence_invalid = True
+            order_violation_ids.add(punch.punch_id)
         unused_punches.append(punch)
 
-    if sequence_invalid:
+    state_corrected = _rescue_declared_final_exit_from_flexible_state(
+        assignments=assignments,
+        candidates=candidates,
+        confidence=confidence,
+        events_by_key=events_by_key,
+        policy=policy,
+    )
+
+    unresolved_before_rescue = list(unused_punches)
+    unused_punches = _rescue_declared_state_punches(
+        assignments=assignments,
+        unused_punches=unused_punches,
+        candidates=candidates,
+        confidence=confidence,
+        events_by_key=events_by_key,
+        policy=policy,
+    )
+    if state_corrected or len(unused_punches) < len(unresolved_before_rescue):
+        technical_flags.append("Estado declarado corregido por contexto")
+
+    unresolved_ids = {punch.punch_id for punch in unused_punches}
+    if order_violation_ids & unresolved_ids:
         technical_flags.append("Secuencia inválida declarada")
     if unused_punches:
         technical_flags.append("Checada no utilizada por el clasificador")
@@ -922,6 +1143,7 @@ def classify_punches(
         declared_result = _classify_declared_state_punches(
             usable_punches,
             [events_by_key[key] for key in EVENT_KEYS],
+            policy,
         )
         return ClassificationResult(
             assignments=declared_result.assignments,
@@ -1076,6 +1298,11 @@ def _assignment_reason(
             f"Asignada como {EVENT_LABELS[candidate.event_key]} segun el estado declarado en el reporte; "
             "ese tipo de checada se toma como fuente primaria y la hora solo se usa para auditoria y validaciones de negocio."
         )
+    elif candidate.basis == "rescate contextual por estado incoherente":
+        reason = (
+            f"Asignada como {EVENT_LABELS[candidate.event_key]} por rescate contextual; "
+            "el estado declarado no era coherente con la secuencia y la hora coincide con un evento faltante plausible."
+        )
     elif candidate.event_key in FLEXIBLE_EVENT_KEYS:
         reason = (
             f"Asignada como {EVENT_LABELS[candidate.event_key]} por contexto cronologico flexible; "
@@ -1098,6 +1325,8 @@ def _assignment_reason(
         reason += f" Esta a {entry_distance:.1f} min de la entrada esperada."
     if candidate.state_match:
         reason += " El tipo registrado por el checador coincide."
+    elif candidate.state_conflict:
+        reason += " El tipo registrado por el checador no coincide y fue conservado en auditoria."
     return reason
 
 
