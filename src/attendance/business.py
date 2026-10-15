@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import math
 from typing import Mapping, Sequence
 
@@ -14,6 +14,7 @@ class BusinessPolicy:
     maximum_lunch_seconds: int = 45 * 60
     severe_tardy_minutes: int = 60
     entry_grace_seconds: int = 59
+    exit_grace_seconds: int = 10 * 60
 
 
 @dataclass
@@ -102,6 +103,14 @@ def evaluate_business(
         early_leave_minutes = int((expected["exit"] - exit_time).total_seconds() // 60)
         if early_leave_minutes > 0:
             incidents.append(f"Salida anticipada ({early_leave_minutes} min)")
+
+    if exit_time is not None:
+        allowed_exit = expected["exit"] + timedelta(seconds=policy.exit_grace_seconds)
+        if exit_time > allowed_exit:
+            excess_seconds = int((exit_time - allowed_exit).total_seconds())
+            excess_minutes = excess_seconds // 60
+            if excess_minutes > 0:
+                incidents.append(f"Exceso en salida (+{excess_minutes} min)")
 
     if partial_meal_ambiguous:
         incidents.append("Registro incompleto")

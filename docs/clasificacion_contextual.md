@@ -121,6 +121,8 @@ Si también existe el par completo de comida, se descuenta la duración real ent
 
 Para el cálculo exclusivamente, una entrada registrada hasta `08:00:59` se considera como `08:00:00`. Desde `08:01:00` se usa la hora real registrada. Nunca se sustituyen ni inventan checadas faltantes.
 
+La salida final tiene 10 minutos de tolerancia sobre la salida programada de la jornada y solo cuenta minutos completos después de ese margen. De lunes a viernes, `17:10:59` sigue siendo válido y `17:11:00` genera `Exceso en salida (+1 min)`; el sábado se aplica la misma regla desde `14:10:00`.
+
 ## Catálogo operativo
 
 - `Sin entrada`
@@ -131,6 +133,7 @@ Para el cálculo exclusivamente, una entrada registrada hasta `08:00:59` se cons
 - `Retardo grave (N min)`
 - `Exceso de comida (+N min)`
 - `Salida anticipada (N min)`
+- `Exceso en salida (+N min)`
 - `Registro ambiguo`
 - `Registro incompleto`
 - `Checada no reconocida`

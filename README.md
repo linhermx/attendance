@@ -45,6 +45,8 @@ Herramienta para analizar control de asistencia a partir de archivos exportados 
 - El retardo se calcula únicamente con una entrada real clasificada.
 - Un retardo de 60 minutos o más se muestra como `Retardo grave`.
 - La salida anticipada se compara contra la salida programada.
+- La salida final tiene 10 minutos de tolerancia sobre la hora programada de cada jornada.
+- Solo se cuentan minutos completos después de la tolerancia; `17:10:59` sigue siendo válido y `17:11:00` genera `Exceso en salida (+1 min)`.
 
 ### Comida
 

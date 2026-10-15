@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.3.0] - 2026-10-15
+
+### Added
+
+- Report final-exit punches recorded after the schedule-specific 10-minute tolerance as an operational incident.
+
 ## [v2.2.1] - 2026-06-26
 
 ### Changed

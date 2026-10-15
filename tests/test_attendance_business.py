@@ -509,8 +509,8 @@ class ContextualClassificationTests(unittest.TestCase):
         self.assertEqual(result["inicio_comida"], "12:05:03")
         self.assertEqual(result["fin_comida"], "12:43:09")
         self.assertEqual(result["salida"], "18:18:07")
-        self.assertEqual(result["status"], "Retardo")
-        self.assertEqual(result["detalle"], "Retardo (14 min)")
+        self.assertEqual(result["status"], "Retardo + incidencia")
+        self.assertEqual(result["detalle"], "Retardo (14 min) | Exceso en salida (+68 min)")
         self.assertNotIn("Sin salida final", result["detalle"])
         self.assertNotIn("Secuencia inválida", result["detalle"])
         self.assertNotIn("Checada registrada sin clasificar", result["detalle"])
@@ -540,8 +540,8 @@ class ContextualClassificationTests(unittest.TestCase):
         self.assertEqual(row["Fin comida"], "12:43:09")
         self.assertEqual(row["Salida"], "18:18:07")
         self.assertEqual(row["Horas trabajadas"], "09:25")
-        self.assertEqual(row["Estatus"], "Retardo")
-        self.assertEqual(row["Detalle"], "Retardo (14 min)")
+        self.assertEqual(row["Estatus"], "Retardo + incidencia")
+        self.assertEqual(row["Detalle"], "Retardo (14 min) | Exceso en salida (+68 min)")
         self.assertIn("Estado declarado corregido por contexto", row[audit_column])
         self.assertNotIn("Checada registrada sin clasificar", row["Detalle"])
 
@@ -590,7 +590,10 @@ class DuplicatePunchNormalizationTests(unittest.TestCase):
         self.assertIsNone(result["fin_comida"])
         self.assertEqual(result["salida"], "19:04:21")
         self.assertEqual(result["status"], "Retardo + incidencia")
-        self.assertEqual(result["detalle"], "Retardo (3 min) | Sin regreso de comida")
+        self.assertEqual(
+            result["detalle"],
+            "Retardo (3 min) | Sin regreso de comida | Exceso en salida (+114 min)",
+        )
         self.assertNotIn("Exceso de comida", result["detalle"])
         self.assertNotIn("Checada no reconocida", result["detalle"])
         self.assertIn("08:06:48", result["checadas_no_utilizadas"])
@@ -652,7 +655,10 @@ class DuplicatePunchNormalizationTests(unittest.TestCase):
         self.assertEqual(row["Inicio comida"], "12:03:12")
         self.assertEqual(row["Fin comida"], "")
         self.assertEqual(row["Salida"], "19:04:21")
-        self.assertEqual(row["Detalle"], "Retardo (3 min) | Sin regreso de comida")
+        self.assertEqual(
+            row["Detalle"],
+            "Retardo (3 min) | Sin regreso de comida | Exceso en salida (+114 min)",
+        )
         self.assertNotIn("Exceso de comida", row["Detalle"])
         self.assertNotIn("Checada no reconocida", row["Detalle"])
         self.assertIn("08:06:48 -> duplicada/no utilizada", row["Auditoría clasificación"])
@@ -666,6 +672,56 @@ class OperationalEvaluationTests(unittest.TestCase):
         self.assertTrue(saturday.is_workday)
         self.assertEqual(weekday.lunch_max_minutes, 45)
         self.assertEqual(saturday.lunch_max_minutes, 30)
+
+    def test_weekday_exit_at_tolerance_limit_is_punctual(self) -> None:
+        row = operational_row(
+            ["08:00:00", "12:00:00", "12:45:00", "17:10:00"],
+            work_date=date(2026, 6, 5),
+        )
+        self.assertEqual(row["Estatus"], "Puntual")
+        self.assertEqual(row["Detalle"], "")
+
+    def test_weekday_exit_after_tolerance_reports_excess(self) -> None:
+        first_second = operational_row(
+            ["08:00:00", "12:00:00", "12:45:00", "17:10:01"],
+            work_date=date(2026, 6, 5),
+        )
+        first_minute = operational_row(
+            ["08:00:00", "12:00:00", "12:45:00", "17:11:00"],
+            work_date=date(2026, 6, 5),
+        )
+        four_minutes = operational_row(
+            ["08:00:00", "12:00:00", "12:45:00", "17:14:26"],
+            work_date=date(2026, 6, 5),
+        )
+        self.assertEqual(first_second["Estatus"], "Puntual")
+        self.assertEqual(first_second["Detalle"], "")
+        self.assertEqual(first_minute["Estatus"], "Incidencia")
+        self.assertEqual(first_minute["Detalle"], "Exceso en salida (+1 min)")
+        self.assertEqual(four_minutes["Estatus"], "Incidencia")
+        self.assertEqual(four_minutes["Detalle"], "Exceso en salida (+4 min)")
+
+    def test_exit_excess_combined_with_tardy_uses_combined_status(self) -> None:
+        row = operational_row(
+            ["08:11:21", "12:00:00", "12:45:00", "17:14:26"],
+            work_date=date(2026, 6, 5),
+        )
+        self.assertEqual(row["Estatus"], "Retardo + incidencia")
+        self.assertEqual(row["Detalle"], "Retardo (11 min) | Exceso en salida (+4 min)")
+
+    def test_saturday_exit_uses_scheduled_exit_plus_ten_minutes(self) -> None:
+        exact = operational_row(
+            ["08:00:00", "12:00:00", "12:30:00", "14:10:00"],
+            work_date=date(2026, 6, 6),
+        )
+        over = operational_row(
+            ["08:00:00", "12:00:00", "12:30:00", "14:14:26"],
+            work_date=date(2026, 6, 6),
+        )
+        self.assertEqual(exact["Estatus"], "Puntual")
+        self.assertEqual(exact["Detalle"], "")
+        self.assertEqual(over["Estatus"], "Incidencia")
+        self.assertEqual(over["Detalle"], "Exceso en salida (+4 min)")
 
     def test_saturday_operational_evaluation_uses_30_minutes(self) -> None:
         exact = operational_row(
