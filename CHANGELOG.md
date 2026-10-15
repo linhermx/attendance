@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.3.1] - 2026-10-15
+
+### Fixed
+
+- Restored the required NumPy runtime binaries in Windows packages and added packaged-runtime validation.
+
 ## [v2.3.0] - 2026-10-15
 
 ### Added

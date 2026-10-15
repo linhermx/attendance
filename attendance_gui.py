@@ -10,5 +10,16 @@ if SRC.exists() and str(SRC) not in sys.path:
 from attendance.gui import main
 
 
+def _smoke_test() -> None:
+    import numpy
+    import pandas
+
+    if not numpy.__version__ or not pandas.__version__:
+        raise RuntimeError("No se pudieron cargar las dependencias de datos.")
+
+
 if __name__ == "__main__":
-    main()
+    if "--smoke-test" in sys.argv:
+        _smoke_test()
+    else:
+        main()

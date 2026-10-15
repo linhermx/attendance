@@ -22,6 +22,11 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 
+python -c "import numpy, pandas; print(f'Runtime de datos verificado: NumPy {numpy.__version__}, pandas {pandas.__version__}')"
+if ($LASTEXITCODE -ne 0) {
+  throw "El entorno de build no puede importar NumPy y pandas. Recrea venv antes de empaquetar."
+}
+
 $distDir = ".\dist"
 $buildDir = ".\build\attendance_windows"
 $appDir = Join-Path $distDir "attendance_windows"
@@ -58,9 +63,24 @@ $pyiArgs += "attendance_gui.py"
 
 python -m PyInstaller @pyiArgs
 
-if (!(Test-Path (Join-Path $appDir "attendance_windows.exe"))) {
+$appExePath = Join-Path $appDir "attendance_windows.exe"
+if (!(Test-Path $appExePath)) {
   throw "No se genero el ejecutable: dist\attendance_windows\attendance_windows.exe"
 }
+
+$smokeProcess = Start-Process `
+  -FilePath $appExePath `
+  -ArgumentList "--smoke-test" `
+  -WindowStyle Hidden `
+  -PassThru
+if (!$smokeProcess.WaitForExit(15000)) {
+  Stop-Process -Id $smokeProcess.Id -Force -ErrorAction SilentlyContinue
+  throw "El ejecutable empaquetado no completo la autoprueba en 15 segundos."
+}
+if ($smokeProcess.ExitCode -ne 0) {
+  throw "El ejecutable empaquetado fallo la autoprueba con codigo $($smokeProcess.ExitCode)."
+}
+Write-Host "Autoprueba del ejecutable completada correctamente."
 
 Compress-Archive -Path $appDir -DestinationPath $zipPath -Force
 
