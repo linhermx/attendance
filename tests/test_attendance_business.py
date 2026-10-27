@@ -180,7 +180,7 @@ class FlexibleLunchTests(unittest.TestCase):
         self.assertEqual(result["fin_comida"], "12:55:01")
         self.assertEqual(result["salida"], "17:00:00")
         self.assertEqual(result["status"], "Incidencia")
-        self.assertEqual(result["detalle"], "Exceso de comida (+6 min)")
+        self.assertEqual(result["detalle"], "Exceso de comida (+5 min)")
         self.assertNotIn("Salida anticipada", result["detalle"])
         self.assertNotIn("Registro ambiguo", result["detalle"])
 
@@ -202,29 +202,39 @@ class FlexibleLunchTests(unittest.TestCase):
                 self.assertEqual(result["inicio_comida"], lunch_out)
                 self.assertEqual(result["fin_comida"], lunch_return)
 
-    def test_weekday_45_00_is_valid_and_45_01_is_excess(self) -> None:
+    def test_weekday_lunch_counts_only_complete_excess_minutes(self) -> None:
         exact = clasificar_checadas(
             ["08:00:00", "12:40:00", "13:25:00", "17:00:00"],
             WEEKDAY_SHIFT,
         )
-        over = clasificar_checadas(
-            ["08:00:00", "12:40:00", "13:25:01", "17:00:00"],
+        partial_minute = clasificar_checadas(
+            ["08:00:00", "12:40:00", "13:25:59", "17:00:00"],
+            WEEKDAY_SHIFT,
+        )
+        first_minute = clasificar_checadas(
+            ["08:00:00", "12:40:00", "13:26:00", "17:00:00"],
             WEEKDAY_SHIFT,
         )
         self.assertEqual(exact["detalle"], "")
-        self.assertEqual(over["detalle"], "Exceso de comida (+1 min)")
+        self.assertEqual(partial_minute["detalle"], "")
+        self.assertEqual(first_minute["detalle"], "Exceso de comida (+1 min)")
 
-    def test_saturday_30_00_is_valid_and_30_01_is_excess(self) -> None:
+    def test_saturday_lunch_counts_only_complete_excess_minutes(self) -> None:
         exact = clasificar_checadas(
             ["08:00:00", "12:40:00", "13:10:00", "14:00:00"],
             SATURDAY_SHIFT,
         )
-        over = clasificar_checadas(
-            ["08:00:00", "12:40:00", "13:10:01", "14:00:00"],
+        partial_minute = clasificar_checadas(
+            ["08:00:00", "12:40:00", "13:10:59", "14:00:00"],
+            SATURDAY_SHIFT,
+        )
+        first_minute = clasificar_checadas(
+            ["08:00:00", "12:40:00", "13:11:00", "14:00:00"],
             SATURDAY_SHIFT,
         )
         self.assertEqual(exact["detalle"], "")
-        self.assertEqual(over["detalle"], "Exceso de comida (+1 min)")
+        self.assertEqual(partial_minute["detalle"], "")
+        self.assertEqual(first_minute["detalle"], "Exceso de comida (+1 min)")
 
     def test_50_minute_weekday_lunch_reports_only_five_minute_excess(self) -> None:
         result = clasificar_checadas(
@@ -728,12 +738,18 @@ class OperationalEvaluationTests(unittest.TestCase):
             ["08:00:00", "12:40:00", "13:10:00", "14:00:00"],
             work_date=date(2026, 6, 6),
         )
-        over = operational_row(
-            ["08:00:00", "12:40:00", "13:10:01", "14:00:00"],
+        partial_minute = operational_row(
+            ["08:00:00", "12:40:00", "13:10:59", "14:00:00"],
+            work_date=date(2026, 6, 6),
+        )
+        first_minute = operational_row(
+            ["08:00:00", "12:40:00", "13:11:00", "14:00:00"],
             work_date=date(2026, 6, 6),
         )
         self.assertEqual(exact["Estatus"], "Puntual")
-        self.assertEqual(over["Detalle"], "Exceso de comida (+1 min)")
+        self.assertEqual(partial_minute["Estatus"], "Puntual")
+        self.assertEqual(partial_minute["Detalle"], "")
+        self.assertEqual(first_minute["Detalle"], "Exceso de comida (+1 min)")
 
     def test_partial_cutoff_does_not_report_lunch_omissions(self) -> None:
         row = operational_row(
@@ -1072,8 +1088,10 @@ class ReportingAndDocumentationTests(unittest.TestCase):
         for text in (readme, docs):
             self.assertIn("Día no laborable", text)
             self.assertIn("Revisión", text)
-            self.assertIn("30:01", text)
-            self.assertIn("45:01", text)
+            self.assertIn("30:59", text)
+            self.assertIn("31:00", text)
+            self.assertIn("45:59", text)
+            self.assertIn("46:00", text)
         self.assertIn("Sunday is treated as a non-working day", changelog)
         self.assertNotIn(REMOVED_VISIBLE_LABEL.lower(), readme.lower())
         removed_section = changelog.split("### Removed", 1)[1].split("## ", 1)[0].strip()

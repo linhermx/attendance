@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v2.3.2] - 2026-10-27
+
+### Fixed
+
+- Count only complete minutes beyond the schedule-specific lunch limit when reporting meal-time excess.
+
 ## [v2.3.1] - 2026-10-15
 
 ### Fixed

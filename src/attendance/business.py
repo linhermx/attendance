@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import math
 from typing import Mapping, Sequence
 
 from .classification import ClassificationResult, EVENT_KEYS, ExpectedEvent
@@ -95,8 +94,10 @@ def evaluate_business(
         lunch_duration_seconds = int((lunch_return - lunch_out).total_seconds())
         lunch_minutes = lunch_duration_seconds // 60
         if lunch_duration_seconds > policy.maximum_lunch_seconds:
-            excess_minutes = math.ceil((lunch_duration_seconds - policy.maximum_lunch_seconds) / 60)
-            incidents.append(f"Exceso de comida (+{excess_minutes} min)")
+            excess_seconds = lunch_duration_seconds - policy.maximum_lunch_seconds
+            excess_minutes = excess_seconds // 60
+            if excess_minutes > 0:
+                incidents.append(f"Exceso de comida (+{excess_minutes} min)")
 
     early_leave_minutes: int | None = None
     if exit_time is not None and exit_time < expected["exit"]:

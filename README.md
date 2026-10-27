@@ -52,8 +52,9 @@ Herramienta para analizar control de asistencia a partir de archivos exportados 
 
 - La duración máxima se selecciona automáticamente por jornada: 45 minutos de lunes a viernes y 30 minutos el sábado.
 - El regreso permitido se calcula desde el inicio real de comida.
-- De lunes a viernes, `45:00` es válido y `45:01` genera `Exceso de comida (+1 min)`.
-- El sábado, `30:00` es válido y `30:01` genera `Exceso de comida (+1 min)`.
+- Solo se cuentan minutos completos de exceso.
+- De lunes a viernes, `45:59` es válido y `46:00` genera `Exceso de comida (+1 min)`.
+- El sábado, `30:59` es válido y `31:00` genera `Exceso de comida (+1 min)`.
 - La comparación usa segundos reales.
 - En cortes parciales no se reporta comida faltante solamente porque pasó la hora teórica.
 

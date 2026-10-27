@@ -85,13 +85,13 @@ regreso_permitido = inicio_real_comida + máximo_de_la_jornada
 La jornada se selecciona automáticamente por fecha: de lunes a viernes el máximo es 45 minutos y el sábado es 30 minutos. La comparación usa segundos:
 
 ```text
-Lunes a viernes: 45:00 -> válido
-Lunes a viernes: 45:01 -> Exceso de comida (+1 min)
-Sábado: 30:00 -> válido
-Sábado: 30:01 -> Exceso de comida (+1 min)
+Lunes a viernes: 45:59 -> válido
+Lunes a viernes: 46:00 -> Exceso de comida (+1 min)
+Sábado: 30:59 -> válido
+Sábado: 31:00 -> Exceso de comida (+1 min)
 ```
 
-Los minutos de exceso visibles se redondean hacia arriba para no perder segundos excedidos.
+La duración conserva sus segundos reales, pero el detalle operativo solo cuenta minutos completos de exceso.
 
 ## Omisiones y cortes parciales
 
